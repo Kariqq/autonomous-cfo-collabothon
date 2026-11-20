@@ -1,48 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleLogin } from '@react-oauth/google';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8001';
-const STORAGE_KEY_ACCOUNTS = 'financiailly_accounts_v1';
-const STORAGE_KEY_ACTIVE = 'financiailly_active_id_v1';
-
-const INITIAL_ACCOUNTS = [
-  {
-    id: 'acc-1',
-    name: 'Anna Müller',
-    ownerName: 'Anna Müller',
-    email: 'anna.mueller@gmail.com',
-    picture: '',
-    initials: 'AM',
-    role: 'SME Account • Owner',
-    iban: 'DE89 3704 0044 0532 0130 00',
-    taxId: 'DE 294 810 442',
-    liquidity: 342500,
-    taxLiability: '-€38,400 (Q3)',
-    taxSavings: '+€14,500',
-    safetyBuffer: 50000,
-    autoApproveSmall: false,
-    sandboxMode: true,
-    provider: 'google',
-  },
-  {
-    id: 'acc-2',
-    name: 'Lukas Weber',
-    ownerName: 'Lukas Weber',
-    email: 'lukas.weber@gmail.com',
-    picture: '',
-    initials: 'LW',
-    role: 'Corporate Account • CFO',
-    iban: 'DE44 5004 0000 0891 2240 11',
-    taxId: 'DE 812 553 901',
-    liquidity: 890000,
-    taxLiability: '-€94,200 (Q3)',
-    taxSavings: '+€26,800',
-    safetyBuffer: 150000,
-    autoApproveSmall: true,
-    sandboxMode: true,
-    provider: 'google',
-  },
-];
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';
 
 const TAX_PROPOSAL = {
   id: 'tax-01',
@@ -72,18 +31,24 @@ export default function App() {
   const [accounts, setAccounts] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_ACCOUNTS);
-      return saved ? JSON.parse(saved) : INITIAL_ACCOUNTS;
+      return saved ? JSON.parse(saved) : [];
     } catch {
-      return INITIAL_ACCOUNTS;
+      return [];
     }
   });
 
   const [activeAccountId, setActiveAccountId] = useState(() => {
-    return localStorage.getItem(STORAGE_KEY_ACTIVE) || INITIAL_ACCOUNTS[0].id;
+    return localStorage.getItem(STORAGE_KEY_ACTIVE) || '';
   });
 
   const [isSignedIn, setIsSignedIn] = useState(() => {
-    return Boolean(localStorage.getItem(STORAGE_KEY_ACTIVE));
+    try {
+      const savedAccounts = JSON.parse(localStorage.getItem(STORAGE_KEY_ACCOUNTS) || '[]');
+      const savedActive = localStorage.getItem(STORAGE_KEY_ACTIVE);
+      return Boolean(savedActive && savedAccounts.some((a) => a.id === savedActive));
+    } catch {
+      return false;
+    }
   });
 
   const [accountModalOpen, setAccountModalOpen] = useState(false);
@@ -93,6 +58,7 @@ export default function App() {
   const [authMode, setAuthMode] = useState('signin');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  const [authConfirmPassword, setAuthConfirmPassword] = useState('');
   const [authDisplayName, setAuthDisplayName] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
 
@@ -111,9 +77,8 @@ export default function App() {
   ]);
 
   const [historyLog, setHistoryLog] = useState([
-    { id: 1, time: '09:12', label: 'Signed in via Google (anna.mueller@gmail.com)' },
-    { id: 2, time: '09:14', label: 'Identified €14,500 advance tax reduction' },
-    { id: 3, time: '09:15', label: 'Verified upcoming VAT filing deadline' },
+    { id: 1, time: '09:14', label: 'Identified €14,500 advance tax reduction' },
+    { id: 2, time: '09:15', label: 'Verified upcoming VAT filing deadline' },
   ]);
 
   useEffect(() => {
@@ -128,7 +93,7 @@ export default function App() {
     }
   }, [isSignedIn, activeAccountId]);
 
-  const activeAccount = accounts.find((a) => a.id === activeAccountId) || accounts[0];
+  const activeAccount = accounts.find((a) => a.id === activeAccountId) || null;
 
   const formatEuro = (val) =>
     new Intl.NumberFormat('de-DE', {
@@ -156,7 +121,7 @@ export default function App() {
   };
 
   const handleDecision = (choice) => {
-    if (decision !== 'pending') return;
+    if (decision !== 'pending' || !activeAccount) return;
     setDecision(choice);
 
     const statusText =
@@ -236,16 +201,80 @@ export default function App() {
     }
   };
 
-  const handleEmailAuthSubmit = (e) => {
+  const handleEmailAuthSubmit = async (e) => {
     e.preventDefault();
-    if (!authEmail.trim() || !authPassword.trim()) return;
+    setAuthError('');
 
     const email = authEmail.trim().toLowerCase();
-    setAuthLoading(true);
+    if (!email || !authPassword) {
+      setAuthError('Please enter both email and password.');
+      return;
+    }
 
-    setTimeout(() => {
+    if (authMode === 'signup') {
+      if (authPassword.length < 6) {
+        setAuthError('Password must be at least 6 characters.');
+        return;
+      }
+      if (authPassword !== authConfirmPassword) {
+        setAuthError('Passwords do not match.');
+        return;
+      }
+      if (accounts.some((a) => a.email.toLowerCase() === email)) {
+        setAuthError('An account with this email already exists. Switch to Sign In.');
+        return;
+      }
+    }
+
+    setAuthLoading(true);
+    const endpoint = authMode === 'signup' ? '/api/auth/register' : '/api/auth/login';
+
+    try {
+      const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: authDisplayName.trim(),
+          email,
+          password: authPassword,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setAuthError(data.detail || 'Authentication failed.');
+        setAuthLoading(false);
+        return;
+      }
+
+      const serverUser = data.user;
+      setAccounts((prev) => {
+        const exists = prev.some((a) => a.email.toLowerCase() === serverUser.email.toLowerCase());
+        return exists ? prev : [...prev, serverUser];
+      });
+      setActiveAccountId(serverUser.id);
+      setIsSignedIn(true);
+      addLog(
+        authMode === 'signup'
+          ? `Registered new account (${serverUser.email})`
+          : `Signed in (${serverUser.email})`
+      );
+      setAuthEmail('');
+      setAuthPassword('');
+      setAuthConfirmPassword('');
+      setAuthDisplayName('');
+      setAccountModalTab('switch');
+      setAccountModalOpen(false);
+      setAuthLoading(false);
+    } catch {
       const existing = accounts.find((a) => a.email.toLowerCase() === email);
-      if (existing && authMode === 'signin') {
+
+      if (authMode === 'signin') {
+        if (!existing) {
+          setAuthError('No account found with this email. Switch to Create Account to register.');
+          setAuthLoading(false);
+          return;
+        }
         setActiveAccountId(existing.id);
         setIsSignedIn(true);
         addLog(`Signed in (${existing.email})`);
@@ -280,30 +309,36 @@ export default function App() {
           sandboxMode: true,
           provider: 'email',
         };
+
         setAccounts((prev) => [...prev, created]);
         setActiveAccountId(created.id);
         setIsSignedIn(true);
-        addLog(`Registered & signed in (${email})`);
+        addLog(`Registered new account (${email})`);
       }
 
-      setAuthLoading(false);
       setAuthEmail('');
       setAuthPassword('');
+      setAuthConfirmPassword('');
       setAuthDisplayName('');
       setAccountModalTab('switch');
       setAccountModalOpen(false);
-    }, 300);
+      setAuthLoading(false);
+    }
   };
 
   const handleLogout = () => {
+    if (activeAccount) {
+      addLog(`Logged out (${activeAccount.email})`);
+    }
     setIsSignedIn(false);
+    setActiveAccountId('');
     setAccountModalOpen(false);
-    setAccountModalTab('auth');
     setAuthMode('signin');
-    addLog(`Logged out (${activeAccount.email})`);
+    setAuthError('');
   };
 
   const updateActiveAccountSetting = (field, value) => {
+    if (!activeAccount) return;
     setAccounts((prev) =>
       prev.map((acc) => (acc.id === activeAccount.id ? { ...acc, [field]: value } : acc))
     );
@@ -316,7 +351,7 @@ export default function App() {
 
   const handleSend = async (e) => {
     e.preventDefault();
-    if ((!input.trim() && !attachedFile) || loading) return;
+    if ((!input.trim() && !attachedFile) || loading || !activeAccount) return;
 
     const userText = input.trim() || `Analyze tax document: ${attachedFile.name}`;
     const fileNote = attachedFile ? ` [Attached: ${attachedFile.name}]` : '';
@@ -360,7 +395,7 @@ export default function App() {
     }
   };
 
-  if (!isSignedIn) {
+  if (!isSignedIn || !activeAccount) {
     return (
       <div className="min-h-screen w-screen bg-neutral-950 text-neutral-100 flex items-center justify-center p-4 font-sans">
         <div className="w-full max-w-md rounded-2xl bg-neutral-900 border border-neutral-800 p-7 space-y-6 shadow-2xl">
@@ -396,9 +431,6 @@ export default function App() {
                 )
               }
             />
-            {authError && (
-              <p className="text-[11px] text-rose-400 text-center">{authError}</p>
-            )}
           </div>
 
           <div className="relative flex items-center">
@@ -413,7 +445,10 @@ export default function App() {
             <div className="flex gap-2 p-1 rounded-lg bg-neutral-950 border border-neutral-800 font-mono">
               <button
                 type="button"
-                onClick={() => setAuthMode('signin')}
+                onClick={() => {
+                  setAuthMode('signin');
+                  setAuthError('');
+                }}
                 className={`flex-1 py-1.5 rounded-md transition ${
                   authMode === 'signin'
                     ? 'bg-neutral-800 text-white'
@@ -424,7 +459,10 @@ export default function App() {
               </button>
               <button
                 type="button"
-                onClick={() => setAuthMode('signup')}
+                onClick={() => {
+                  setAuthMode('signup');
+                  setAuthError('');
+                }}
                 className={`flex-1 py-1.5 rounded-md transition ${
                   authMode === 'signup'
                     ? 'bg-neutral-800 text-white'
@@ -478,6 +516,26 @@ export default function App() {
               />
             </div>
 
+            {authMode === 'signup' && (
+              <div>
+                <label className="block font-mono text-neutral-400 mb-1">
+                  CONFIRM PASSWORD *
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={authConfirmPassword}
+                  onChange={(e) => setAuthConfirmPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-white"
+                />
+              </div>
+            )}
+
+            {authError && (
+              <p className="text-[11px] text-rose-400">{authError}</p>
+            )}
+
             <button
               type="submit"
               disabled={authLoading}
@@ -491,32 +549,39 @@ export default function App() {
             </button>
           </form>
 
-          <div className="pt-2 border-t border-neutral-800 space-y-2">
-            <div className="text-[11px] font-mono text-neutral-500 uppercase">
-              Quick Demo Accounts
+          {accounts.length > 0 && (
+            <div className="pt-2 border-t border-neutral-800 space-y-2">
+              <div className="text-[11px] font-mono text-neutral-500 uppercase">
+                Saved Accounts
+              </div>
+              <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                {accounts.map((acc) => (
+                  <button
+                    key={acc.id}
+                    type="button"
+                    onClick={() => {
+                      setActiveAccountId(acc.id);
+                      setIsSignedIn(true);
+                      addLog(`Signed in (${acc.email})`);
+                    }}
+                    className="w-full p-2.5 rounded-lg bg-neutral-950 hover:bg-neutral-800 border border-neutral-800 text-left flex items-center justify-between transition cursor-pointer"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold text-white truncate">
+                        {acc.name}
+                      </div>
+                      <div className="text-[10px] font-mono text-neutral-400 truncate">
+                        {acc.email}
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-mono text-neutral-400 shrink-0">
+                      Sign In →
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              {accounts.slice(0, 2).map((acc) => (
-                <button
-                  key={acc.id}
-                  type="button"
-                  onClick={() => {
-                    setActiveAccountId(acc.id);
-                    setIsSignedIn(true);
-                    addLog(`Signed in to demo account (${acc.email})`);
-                  }}
-                  className="p-2.5 rounded-lg bg-neutral-950 hover:bg-neutral-800 border border-neutral-800 text-left transition cursor-pointer"
-                >
-                  <div className="text-xs font-semibold text-white truncate">
-                    {acc.name}
-                  </div>
-                  <div className="text-[10px] font-mono text-neutral-400 truncate">
-                    {acc.email}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
+          )}
         </div>
       </div>
     );
@@ -889,7 +954,7 @@ export default function App() {
             {accountModalTab === 'switch' && (
               <div className="p-5 space-y-3">
                 <div className="flex items-center justify-between text-xs text-neutral-400">
-                  <span>Signed-in workspaces:</span>
+                  <span>Signed-in accounts:</span>
                   <button
                     type="button"
                     onClick={handleLogout}
