@@ -1,10 +1,7 @@
 import os
-from pathlib import Path
 
 import requests
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 app = FastAPI(title="Autonomous CFO Agent")
@@ -12,10 +9,6 @@ app = FastAPI(title="Autonomous CFO Agent")
 MODEL_URL = os.getenv("MODEL_URL", "http://localhost:8000/v1/chat/completions")
 MODEL_NAME = os.getenv("MODEL_NAME", "llama-32-3b-instruct")
 MODEL_TOKEN = os.getenv("MODEL_TOKEN", "")
-
-BASE_DIR = Path(__file__).parent
-app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
-
 
 class CashflowInput(BaseModel):
     company: str
@@ -43,12 +36,6 @@ def call_llm(prompt: str) -> str:
         return resp.json()["choices"][0]["message"]["content"]
     except requests.RequestException as e:
         raise HTTPException(status_code=502, detail=f"Błąd modelu: {e}")
-
-
-@app.get("/")
-def index():
-    return FileResponse(BASE_DIR / "static" / "index.html")
-
 
 @app.get("/health")
 def health():
