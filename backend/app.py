@@ -4,10 +4,10 @@ import re
 from typing import Any, Dict, List
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
-from schemas import FinancialContext, ToolOutput
+from schemas import FinancialContext, Invoice, ToolOutput
 from tools.tax_agent import run_tax_agent
 
 # Gdy koledzy z zespołu dodadzą swoje pliki do folderu tools/, odkomentujcie poniższe linie:
@@ -26,9 +26,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MODEL_URL = os.getenv("MODEL_URL", "http://localhost:8000/v1/chat/completions")
-MODEL_NAME = os.getenv("MODEL_NAME", "llama-32-3b-instruct")
-MODEL_TOKEN = os.getenv("MODEL_TOKEN", "")
+_default_url = "http://llama-32-3b-instruct-predictor.my-first-model.svc.cluster.local:8080/v1/chat/completions"
+
+MODEL_URL = os.getenv("MODEL_URL", "").strip() or _default_url
+MODEL_NAME = os.getenv("MODEL_NAME", "").strip() or "llama-32-3b-instruct"
+MODEL_TOKEN = os.getenv("MODEL_TOKEN", "").strip()
 
 
 # ==========================================
@@ -103,10 +105,7 @@ def route_agents_for_query(ctx: FinancialContext) -> List[str]:
     if any(k in q for k in ["inwest", "lokat", "nadwyżk", "capex", "fundusz", "mmf", "deposit"]):
         selected.append("investment")
 
-    # Zostawiamy tylko te, które są już zaimplementowane w get_active_agents()
     valid_selected = [name for name in selected if name in active]
-
-    # Jeśli pytanie było ogólne (np. "Jaka jest kondycja firmy?"), odpalamy wszystkie aktywne agenty
     return valid_selected if valid_selected else list(active.keys())
 
 
@@ -120,6 +119,7 @@ def health():
         "status": "ok",
         "active_agents": list(get_active_agents().keys()),
         "model": MODEL_NAME,
+        "model_url": MODEL_URL,
     }
 
 
@@ -202,7 +202,6 @@ def endpoint_autonomous_cfo(ctx: FinancialContext):
     try:
         parsed = extract_json_safe(raw_response)
     except Exception:
-        # Bezpieczny fallback, gdyby mały model 3B nie domknął klamry JSON
         parsed = {
             "executive_summary": raw_response.strip(),
             "top_priorities": [],
@@ -213,4 +212,62 @@ def endpoint_autonomous_cfo(ctx: FinancialContext):
         "agents_triggered": [out.agent_name for out in tool_outputs],
         "cfo_decision": parsed,
         "detailed_reports": [out.model_dump() for out in tool_outputs],
+    }
+
+
+# ==========================================
+# 4. ENDPOINT DLA FRONTENDU (frontend/src/App.jsx)
+# ==========================================
+
+@app.post("/api/cfo/chat")
+async def frontend_cfo_chat(
+    prompt: str = Form(...),
+    agent: str = Form("tax"),
+    account: str = Form("SME Client"),
+    file: UploadFile | None = File(None),
+):
+    """Endpoint dopasowany 1:1 do FormData z handleSend() w nowym frontend/src/App.jsx"""
+    file_context = ""
+    if file and file.filename:
+        raw_bytes = await file.read()
+        snippet = raw_bytes[:1500].decode("utf-8", errors="ignore")
+        file_context = f"\nAttached document ({file.filename}):\n{snippet}\n"
+
+    is_lukas = "lukas" in account.lower()
+    cash_pln = 890000.0 if is_lukas else 342500.0
+
+    demo_ctx = FinancialContext(
+        company_name=account,
+        cash_balance_pln=cash_pln,
+        monthly_burn_rate_pln=45000.0,
+        cit_rate=0.09,
+        day_of_month=20,
+        user_query=prompt,
+        invoices=[
+            Invoice(id="FV/01", contractor="Enterprise Client", amount=120000.0, vat_rate=0.23, due_in_days=10, type="receivable"),
+            Invoice(id="FV/02", contractor="AI & Cloud R&D Lab", amount=40000.0, vat_rate=0.23, due_in_days=5, type="payable", category="R&D"),
+        ],
+    )
+    tax_report = run_tax_agent(demo_ctx)
+
+    system_prompt = (
+        "You are the Tax Prep AI Agent inside FinancAI.lly running on Red Hat OpenShift AI. "
+        "Provide clear, concise, plain-language tax and financial advice based on the account metrics and Tax Agent telemetry. "
+        "Always reply in the exact same language as the user's question (English or Polish). "
+        "Remind the user that actions remain in Sandbox mode until approved."
+    )
+    user_prompt = (
+        f"Active Account: {account} | Liquidity: €{cash_pln:,.0f} | "
+        f"Est. Q3 Tax Liability: {'-€94,200' if is_lukas else '-€38,400'} | "
+        f"Identified Savings: {'+€26,800' if is_lukas else '+€14,500'}\n"
+        f"Live Tax Agent telemetry: {tax_report.prompt_context}\n"
+        f"Tax recommendations: {json.dumps(tax_report.recommendations, ensure_ascii=False)}"
+        f"{file_context}\n"
+        f"User question: {prompt}"
+    )
+
+    reply_text = call_llm(system_prompt, user_prompt, max_tokens=450)
+    return {
+        "reply": reply_text,
+        "tax_telemetry": tax_report.model_dump(),
     }
