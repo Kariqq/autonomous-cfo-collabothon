@@ -6,8 +6,9 @@ from typing import Any, Dict, List
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-from schemas import FinancialContext, ToolOutput
+from schemas import FinancialContext, Invoice, ToolOutput
 from tools.tax_agent import run_tax_agent
 
 # Gdy koledzy z zespołu dodadzą swoje pliki do folderu tools/, odkomentujcie poniższe linie:
@@ -17,7 +18,7 @@ from tools.tax_agent import run_tax_agent
 
 app = FastAPI(title="Autonomous CFO Agent", version="2.0")
 
-# CORS umożliwia bezproblemowe połączenie z frontendem (np. React / Next.js / Vue)
+# CORS umożliwia bezproblemowe połączenie z frontendem React / Vite
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,12 +27,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_llm_base = os.getenv("LLM_BASE_URL")
-_default_url = f"{_llm_base.rstrip('/')}/chat/completions" if _llm_base else "http://localhost:8000/v1/chat/completions"
+# Konfiguracja modelu LLM działającego w klastrze OpenShift AI
+_default_url = "http://llama-32-3b-instruct-predictor.my-first-model.svc.cluster.local:8080/v1/chat/completions"
 
-MODEL_URL = os.getenv("MODEL_URL", _default_url)
-MODEL_NAME = os.getenv("MODEL_NAME", "llama-32-3b-instruct")
-MODEL_TOKEN = os.getenv("MODEL_TOKEN", "")
+MODEL_URL = os.getenv("MODEL_URL", "").strip() or _default_url
+MODEL_NAME = os.getenv("MODEL_NAME", "").strip() or "llama-32-3b-instruct"
+MODEL_TOKEN = os.getenv("MODEL_TOKEN", "").strip()
+
 
 # ==========================================
 # 1. KOMUNIKACJA Z MODELEM LLM
@@ -74,21 +76,17 @@ def extract_json_safe(text: str) -> Dict[str, Any]:
 
 def get_active_agents():
     """Zwraca słownik aktywnych sub-agentów gotowych do użycia."""
-    agents = {
+    return {
         "tax": run_tax_agent,
         # Odkomentujcie w miarę postępu prac zespołu:
         # "liquidity": run_liquidity_agent,
         # "fx": run_fx_agent,
         # "investment": run_investment_agent,
     }
-    return agents
 
 
 def route_agents_for_query(ctx: FinancialContext) -> List[str]:
-    """
-    Decyduje, które narzędzia (sub-agenty) uruchomić na podstawie zapytania użytkownika.
-    Jeśli brak konkretnego pytania -> uruchamia pełny audyt wszystkich dostępnych agentów.
-    """
+    """Wybiera sub-agenty na podstawie pytania użytkownika lub odpala wszystkie w trybie audytu."""
     active = get_active_agents()
     if not ctx.user_query:
         return list(active.keys())
@@ -105,10 +103,7 @@ def route_agents_for_query(ctx: FinancialContext) -> List[str]:
     if any(k in q for k in ["inwest", "lokat", "nadwyżk", "capex", "fundusz", "mmf", "deposit"]):
         selected.append("investment")
 
-    # Zostawiamy tylko te, które są już zaimplementowane w get_active_agents()
     valid_selected = [name for name in selected if name in active]
-
-    # Jeśli pytanie było ogólne (np. "Jaka jest kondycja firmy?"), odpalamy wszystkie aktywne agenty
     return valid_selected if valid_selected else list(active.keys())
 
 
@@ -122,6 +117,7 @@ def health():
         "status": "ok",
         "active_agents": list(get_active_agents().keys()),
         "model": MODEL_NAME,
+        "model_url": MODEL_URL,
     }
 
 
@@ -153,12 +149,7 @@ def endpoint_tax_agent(ctx: FinancialContext):
 
 @app.post("/cfo/analyze")
 def endpoint_autonomous_cfo(ctx: FinancialContext):
-    """
-    Główny endpoint Multi-Agent CFO:
-    1. Wybiera odpowiednie narzędzia z folderu tools/
-    2. Wykonuje deterministyczne obliczenia finansowe
-    3. Syntetyzuje wyniki za pomocą LLM w spójny plan zarządczy CFO
-    """
+    """Główny endpoint Multi-Agent CFO łączący wszystkie aktywne agenty z folderu tools/."""
     active_agents = get_active_agents()
     agents_to_run = route_agents_for_query(ctx)
 
@@ -204,7 +195,6 @@ def endpoint_autonomous_cfo(ctx: FinancialContext):
     try:
         parsed = extract_json_safe(raw_response)
     except Exception:
-        # Bezpieczny fallback, gdyby mały model 3B nie domknął klamry JSON
         parsed = {
             "executive_summary": raw_response.strip(),
             "top_priorities": [],
@@ -215,4 +205,50 @@ def endpoint_autonomous_cfo(ctx: FinancialContext):
         "agents_triggered": [out.agent_name for out in tool_outputs],
         "cfo_decision": parsed,
         "detailed_reports": [out.model_dump() for out in tool_outputs],
+    }
+
+
+# ==========================================
+# 4. ENDPOINT DLA FRONTENDU (frontend/src/App.jsx)
+# ==========================================
+
+class ChatRequest(BaseModel):
+    prompt: str
+
+
+@app.post("/api/cfo/chat")
+def frontend_cfo_chat(req: ChatRequest):
+    """Endpoint dopasowany 1:1 do funkcji sendMessage() w frontend/src/App.jsx."""
+    demo_ctx = FinancialContext(
+        company_name="SME Client",
+        cash_balance_pln=342500.0,
+        monthly_burn_rate_pln=45000.0,
+        cit_rate=0.09,
+        day_of_month=20,
+        user_query=req.prompt,
+        invoices=[
+            Invoice(id="FV/01", contractor="Enterprise Client", amount=120000.0, vat_rate=0.23, due_in_days=10, type="receivable"),
+            Invoice(id="FV/02", contractor="AI & Cloud R&D Lab", amount=40000.0, vat_rate=0.23, due_in_days=5, type="payable", category="R&D"),
+        ]
+    )
+    tax_report = run_tax_agent(demo_ctx)
+
+    system_prompt = (
+        "You are an Autonomous CFO Copilot for SMEs running on Red Hat OpenShift AI. "
+        "Explain financial and tax decisions in plain, concise business language. "
+        "Reply in the exact same language as the user's question (English or Polish). "
+        "Remind the user that no transaction executes without their approval."
+    )
+    user_prompt = (
+        f"Dashboard State: Available liquidity €342,500, Day 22 cash dip -€82,000, "
+        f"FX exposure $240,000 USD, Idle cash €180,000.\n"
+        f"Live Tax Agent telemetry: {tax_report.prompt_context}\n"
+        f"Tax recommendations: {json.dumps(tax_report.recommendations, ensure_ascii=False)}\n\n"
+        f"Owner question: {req.prompt}"
+    )
+
+    reply_text = call_llm(system_prompt, user_prompt, max_tokens=400)
+    return {
+        "reply": reply_text,
+        "tax_telemetry": tax_report.model_dump()
     }
