@@ -81,3 +81,26 @@ class ToolOutput(BaseModel):
     metrics: Dict[str, Any]
     recommendations: List[Dict[str, Any]]
     prompt_context: str
+
+class InvoiceFX(BaseModel):
+    id: str
+    contractor: str
+    amount: float                       # Kwota netto
+    vat_rate: float = 0.0               # Stawka VAT (np. 0.23, 0.19, 0.0)
+    currency: str = "EUR"               # Waluta faktury/transakcji ("EUR", "PLN", "CHF", "USD", "GBP")
+    due_in_days: int                    # Za ile dni płatność (ujemne = po terminie)
+    type: str                           # "receivable" (wpływ) | "payable" (wydatek)
+    category: Optional[str] = "operacyjne"
+    is_paid: bool = False
+
+
+class FinancialContextFX(BaseModel):
+    company_name: str
+    base_currency: str = "EUR"          # Waluta księgowa firmy (np. "EUR", "PLN", "USD")
+    cash_balance: float                 # Aktualne saldo gotówki w walucie bazowej
+    monthly_burn_rate: float            # Miesięczne koszty stałe w walucie bazowej
+    tax_rate: float = 0.19
+    day_of_month: int = 15
+    invoices: List[InvoiceFX] = Field(default_factory=list)
+    fx_rates: Dict[str, float] = Field(default_factory=dict)  # Opcjonalne kursy nadpisane przez użytkownika
+    user_query: Optional[str] = None
