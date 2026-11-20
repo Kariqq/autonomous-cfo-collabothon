@@ -11,6 +11,9 @@ from pydantic import BaseModel
 from schemas import FinancialContext, Invoice, ToolOutput
 from tools.tax_agent import run_tax_agent
 
+from schemas import LiquidityAgentResponse, LiquidityAnalysisRequest
+from tools.liquidity_agent import run_liquidity_agent
+
 # Gdy koledzy z zespołu dodadzą swoje pliki do folderu tools/, odkomentujcie poniższe linie:
 # from tools.liquidity_tool import run_liquidity_agent
 # from tools.fx_hedging_tool import run_fx_agent
@@ -34,6 +37,8 @@ MODEL_URL = os.getenv("MODEL_URL", "").strip() or _default_url
 MODEL_NAME = os.getenv("MODEL_NAME", "").strip() or "llama-32-3b-instruct"
 MODEL_TOKEN = os.getenv("MODEL_TOKEN", "").strip()
 
+# Rejestr akcji oczekujących na decyzję człowieka (Human-in-the-Loop)
+APPROVAL_QUEUE: Dict[str, LiquidityAgentResponse] = {}
 
 # ==========================================
 # 1. KOMUNIKACJA Z MODELEM LLM
@@ -79,7 +84,7 @@ def get_active_agents():
     return {
         "tax": run_tax_agent,
         # Odkomentujcie w miarę postępu prac zespołu:
-        # "liquidity": run_liquidity_agent,
+        "liquidity": run_liquidity_agent,
         # "fx": run_fx_agent,
         # "investment": run_investment_agent,
     }
@@ -146,6 +151,55 @@ def endpoint_tax_agent(ctx: FinancialContext):
         "agent_output": tax_result.model_dump(),
     }
 
+@app.post("/tools/liquidity/analyze", response_model=LiquidityAgentResponse)
+def analyze_liquidity(request: LiquidityAnalysisRequest):
+    def liquidity_llm_wrapper(user_prompt: str) -> str:
+        sys_prompt = "Jesteś doświadczonym CFO dla MŚP. Odpowiadaj po polsku, zwięźle i na liczbach."
+        try:
+            return call_llm(sys_prompt, user_prompt)
+        except HTTPException:
+            # Fallback do testów, gdy serwer LLM (port 8000) jest wyłączony
+            return (
+                "Prognoza wskazuje na spadek salda poniżej bezpiecznego bufora z powodu "
+                "kumulacji kosztów stałych przy braku wpływów w okresie zamknięcia lokalu. "
+                "Zalecane uruchomienie linii kredytowej na wskazaną kwotę."
+            )
+
+    report = run_liquidity_agent(request, llm_callback=liquidity_llm_wrapper)
+    if report.proposed_action:
+        APPROVAL_QUEUE[report.proposed_action.action_id] = report
+    return report
+
+@app.post("/tools/liquidity/actions/{action_id}/decide")
+def decide_action(action_id: str, approve: bool):
+    if action_id not in APPROVAL_QUEUE:
+        raise HTTPException(status_code=404, detail="Nie znaleziono akcji o podanym ID.")
+
+    report = APPROVAL_QUEUE[action_id]
+    action = report.proposed_action
+
+    if not approve:
+        action.status = "REJECTED"
+        return {
+            "status": action.status,
+            "execution": "NONE",
+            "message": "Użytkownik odrzucił rekomendację agenta.",
+        }
+
+    # Symulacja wykonania po uzyskaniu zgody użytkownika
+    action.status = "APPROVED_EXECUTED_SIMULATED"
+    new_min_balance = round(report.min_projected_balance + action.amount, 2)
+
+    return {
+        "status": action.status,
+        "execution": "SIMULATED_SANDBOX",
+        "message": f"Zatwierdzono. Zasymulowano uruchomienie linii kredytowej +{action.amount:.2f} {action.currency}.",
+        "post_execution_check": {
+            "previous_min_balance": report.min_projected_balance,
+            "simulated_min_balance": new_min_balance,
+            "safety_buffer_restored": new_min_balance >= 5000.0,
+        },
+    }
 
 @app.post("/cfo/analyze")
 def endpoint_autonomous_cfo(ctx: FinancialContext):

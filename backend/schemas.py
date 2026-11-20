@@ -1,4 +1,5 @@
-from typing import Any, Dict, List, Optional
+from datetime import date
+from typing import Any, Dict, List, Optional, Literal
 from pydantic import BaseModel, Field
 
 
@@ -23,6 +24,56 @@ class FinancialContext(BaseModel):
     invoices: List[Invoice] = Field(default_factory=list)
     user_query: Optional[str] = None
 
+class ScheduledTransaction(BaseModel):
+    due_date: date
+    amount: float  # dodatnia = wpływ, ujemna = wydatek
+    category: str  # np. "RENT", "PAYROLL", "TAX", "CAPEX_TRANSFER", "CARD_REVENUE"
+    counterparty: str
+    is_discretionary: bool = False  # np. przelew inwestycyjny do Luigiego = True (można przesunąć)
+
+
+class LiquidityAnalysisRequest(BaseModel):
+    company_name: str
+    as_of_date: date
+    current_balance: float
+    currency: str = "EUR"
+    forecast_days: int = 45
+    safety_buffer: float = 5000.0
+    scheduled_transactions: List[ScheduledTransaction]
+
+
+class ProposedCreditAction(BaseModel):
+    action_id: str
+    status: Literal["PENDING_APPROVAL", "APPROVED_EXECUTED_SIMULATED", "REJECTED"]
+    execution_mode: Literal["SIMULATED", "PERMITTED"] = "SIMULATED"
+    requires_user_approval: bool = True
+    action_type: Literal["CREDIT_FACILITY", "DEFER_DISCRETIONARY_OUTFLOW"]
+    facility_name: str
+    amount: float
+    currency: str
+    estimated_monthly_cost: float
+    explainable_reasoning: str
+
+
+class AutonomyGovernance(BaseModel):
+    independent_analysis: List[str]
+    agent_recommendations: List[str]
+    requires_user_approval: List[str]
+    execution_status: str  # "SIMULATED_SANDBOX" vs "PERMITTED_LIVE"
+
+
+class LiquidityAgentResponse(BaseModel):
+    company_name: str
+    as_of_date: date
+    forecast_horizon_days: int
+    starting_balance: float
+    min_projected_balance: float
+    min_balance_date: date
+    first_buffer_breach_date: Optional[date]
+    liquidity_shortfall: float
+    key_risk_drivers: List[str]
+    governance: AutonomyGovernance
+    proposed_action: Optional[ProposedCreditAction] = None
 
 class ToolOutput(BaseModel):
     agent_name: str
