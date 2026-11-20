@@ -1,6 +1,6 @@
 import uuid
 from datetime import timedelta
-from typing import Dict, List, Tuple
+from typing import Dict, Optional, List, Tuple
 
 from schemas import (
     AutonomyGovernance,

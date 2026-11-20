@@ -4,15 +4,11 @@ import re
 from typing import Any, Dict, List
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 
 from schemas import FinancialContext, Invoice, ToolOutput
 from tools.tax_agent import run_tax_agent
-
-from schemas import LiquidityAgentResponse, LiquidityAnalysisRequest
-from tools.liquidity_agent import run_liquidity_agent
 
 # Gdy koledzy z zespołu dodadzą swoje pliki do folderu tools/, odkomentujcie poniższe linie:
 # from tools.liquidity_tool import run_liquidity_agent
@@ -21,7 +17,7 @@ from tools.liquidity_agent import run_liquidity_agent
 
 app = FastAPI(title="Autonomous CFO Agent", version="2.0")
 
-# CORS umożliwia bezproblemowe połączenie z frontendem React / Vite
+# CORS umożliwia bezproblemowe połączenie z frontendem (np. React / Next.js / Vue)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,15 +26,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Konfiguracja modelu LLM działającego w klastrze OpenShift AI
 _default_url = "http://llama-32-3b-instruct-predictor.my-first-model.svc.cluster.local:8080/v1/chat/completions"
 
 MODEL_URL = os.getenv("MODEL_URL", "").strip() or _default_url
 MODEL_NAME = os.getenv("MODEL_NAME", "").strip() or "llama-32-3b-instruct"
 MODEL_TOKEN = os.getenv("MODEL_TOKEN", "").strip()
 
-# Rejestr akcji oczekujących na decyzję człowieka (Human-in-the-Loop)
-APPROVAL_QUEUE: Dict[str, LiquidityAgentResponse] = {}
 
 # ==========================================
 # 1. KOMUNIKACJA Z MODELEM LLM
@@ -81,17 +74,21 @@ def extract_json_safe(text: str) -> Dict[str, Any]:
 
 def get_active_agents():
     """Zwraca słownik aktywnych sub-agentów gotowych do użycia."""
-    return {
+    agents = {
         "tax": run_tax_agent,
         # Odkomentujcie w miarę postępu prac zespołu:
-        "liquidity": run_liquidity_agent,
+        # "liquidity": run_liquidity_agent,
         # "fx": run_fx_agent,
         # "investment": run_investment_agent,
     }
+    return agents
 
 
 def route_agents_for_query(ctx: FinancialContext) -> List[str]:
-    """Wybiera sub-agenty na podstawie pytania użytkownika lub odpala wszystkie w trybie audytu."""
+    """
+    Decyduje, które narzędzia (sub-agenty) uruchomić na podstawie zapytania użytkownika.
+    Jeśli brak konkretnego pytania -> uruchamia pełny audyt wszystkich dostępnych agentów.
+    """
     active = get_active_agents()
     if not ctx.user_query:
         return list(active.keys())
@@ -151,59 +148,15 @@ def endpoint_tax_agent(ctx: FinancialContext):
         "agent_output": tax_result.model_dump(),
     }
 
-@app.post("/tools/liquidity/analyze", response_model=LiquidityAgentResponse)
-def analyze_liquidity(request: LiquidityAnalysisRequest):
-    def liquidity_llm_wrapper(user_prompt: str) -> str:
-        sys_prompt = "Jesteś doświadczonym CFO dla MŚP. Odpowiadaj po polsku, zwięźle i na liczbach."
-        try:
-            return call_llm(sys_prompt, user_prompt)
-        except HTTPException:
-            # Fallback do testów, gdy serwer LLM (port 8000) jest wyłączony
-            return (
-                "Prognoza wskazuje na spadek salda poniżej bezpiecznego bufora z powodu "
-                "kumulacji kosztów stałych przy braku wpływów w okresie zamknięcia lokalu. "
-                "Zalecane uruchomienie linii kredytowej na wskazaną kwotę."
-            )
-
-    report = run_liquidity_agent(request, llm_callback=liquidity_llm_wrapper)
-    if report.proposed_action:
-        APPROVAL_QUEUE[report.proposed_action.action_id] = report
-    return report
-
-@app.post("/tools/liquidity/actions/{action_id}/decide")
-def decide_action(action_id: str, approve: bool):
-    if action_id not in APPROVAL_QUEUE:
-        raise HTTPException(status_code=404, detail="Nie znaleziono akcji o podanym ID.")
-
-    report = APPROVAL_QUEUE[action_id]
-    action = report.proposed_action
-
-    if not approve:
-        action.status = "REJECTED"
-        return {
-            "status": action.status,
-            "execution": "NONE",
-            "message": "Użytkownik odrzucił rekomendację agenta.",
-        }
-
-    # Symulacja wykonania po uzyskaniu zgody użytkownika
-    action.status = "APPROVED_EXECUTED_SIMULATED"
-    new_min_balance = round(report.min_projected_balance + action.amount, 2)
-
-    return {
-        "status": action.status,
-        "execution": "SIMULATED_SANDBOX",
-        "message": f"Zatwierdzono. Zasymulowano uruchomienie linii kredytowej +{action.amount:.2f} {action.currency}.",
-        "post_execution_check": {
-            "previous_min_balance": report.min_projected_balance,
-            "simulated_min_balance": new_min_balance,
-            "safety_buffer_restored": new_min_balance >= 5000.0,
-        },
-    }
 
 @app.post("/cfo/analyze")
 def endpoint_autonomous_cfo(ctx: FinancialContext):
-    """Główny endpoint Multi-Agent CFO łączący wszystkie aktywne agenty z folderu tools/."""
+    """
+    Główny endpoint Multi-Agent CFO:
+    1. Wybiera odpowiednie narzędzia z folderu tools/
+    2. Wykonuje deterministyczne obliczenia finansowe
+    3. Syntetyzuje wyniki za pomocą LLM w spójny plan zarządczy CFO
+    """
     active_agents = get_active_agents()
     agents_to_run = route_agents_for_query(ctx)
 
@@ -266,43 +219,55 @@ def endpoint_autonomous_cfo(ctx: FinancialContext):
 # 4. ENDPOINT DLA FRONTENDU (frontend/src/App.jsx)
 # ==========================================
 
-class ChatRequest(BaseModel):
-    prompt: str
-
-
 @app.post("/api/cfo/chat")
-def frontend_cfo_chat(req: ChatRequest):
-    """Endpoint dopasowany 1:1 do funkcji sendMessage() w frontend/src/App.jsx."""
+async def frontend_cfo_chat(
+    prompt: str = Form(...),
+    agent: str = Form("tax"),
+    account: str = Form("SME Client"),
+    file: UploadFile | None = File(None),
+):
+    """Endpoint dopasowany 1:1 do FormData z handleSend() w nowym frontend/src/App.jsx"""
+    file_context = ""
+    if file and file.filename:
+        raw_bytes = await file.read()
+        snippet = raw_bytes[:1500].decode("utf-8", errors="ignore")
+        file_context = f"\nAttached document ({file.filename}):\n{snippet}\n"
+
+    is_lukas = "lukas" in account.lower()
+    cash_pln = 890000.0 if is_lukas else 342500.0
+
     demo_ctx = FinancialContext(
-        company_name="SME Client",
-        cash_balance_pln=342500.0,
+        company_name=account,
+        cash_balance_pln=cash_pln,
         monthly_burn_rate_pln=45000.0,
         cit_rate=0.09,
         day_of_month=20,
-        user_query=req.prompt,
+        user_query=prompt,
         invoices=[
             Invoice(id="FV/01", contractor="Enterprise Client", amount=120000.0, vat_rate=0.23, due_in_days=10, type="receivable"),
             Invoice(id="FV/02", contractor="AI & Cloud R&D Lab", amount=40000.0, vat_rate=0.23, due_in_days=5, type="payable", category="R&D"),
-        ]
+        ],
     )
     tax_report = run_tax_agent(demo_ctx)
 
     system_prompt = (
-        "You are an Autonomous CFO Copilot for SMEs running on Red Hat OpenShift AI. "
-        "Explain financial and tax decisions in plain, concise business language. "
-        "Reply in the exact same language as the user's question (English or Polish). "
-        "Remind the user that no transaction executes without their approval."
+        "You are the Tax Prep AI Agent inside FinancAI.lly running on Red Hat OpenShift AI. "
+        "Provide clear, concise, plain-language tax and financial advice based on the account metrics and Tax Agent telemetry. "
+        "Always reply in the exact same language as the user's question (English or Polish). "
+        "Remind the user that actions remain in Sandbox mode until approved."
     )
     user_prompt = (
-        f"Dashboard State: Available liquidity €342,500, Day 22 cash dip -€82,000, "
-        f"FX exposure $240,000 USD, Idle cash €180,000.\n"
+        f"Active Account: {account} | Liquidity: €{cash_pln:,.0f} | "
+        f"Est. Q3 Tax Liability: {'-€94,200' if is_lukas else '-€38,400'} | "
+        f"Identified Savings: {'+€26,800' if is_lukas else '+€14,500'}\n"
         f"Live Tax Agent telemetry: {tax_report.prompt_context}\n"
-        f"Tax recommendations: {json.dumps(tax_report.recommendations, ensure_ascii=False)}\n\n"
-        f"Owner question: {req.prompt}"
+        f"Tax recommendations: {json.dumps(tax_report.recommendations, ensure_ascii=False)}"
+        f"{file_context}\n"
+        f"User question: {prompt}"
     )
 
-    reply_text = call_llm(system_prompt, user_prompt, max_tokens=400)
+    reply_text = call_llm(system_prompt, user_prompt, max_tokens=450)
     return {
         "reply": reply_text,
-        "tax_telemetry": tax_report.model_dump()
+        "tax_telemetry": tax_report.model_dump(),
     }
