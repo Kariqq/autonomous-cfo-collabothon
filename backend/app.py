@@ -26,10 +26,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-MODEL_URL = os.getenv("MODEL_URL", "http://localhost:8000/v1/chat/completions")
+_llm_base = os.getenv("LLM_BASE_URL")
+_default_url = f"{_llm_base.rstrip('/')}/chat/completions" if _llm_base else "http://localhost:8000/v1/chat/completions"
+
+MODEL_URL = os.getenv("MODEL_URL", _default_url)
 MODEL_NAME = os.getenv("MODEL_NAME", "llama-32-3b-instruct")
 MODEL_TOKEN = os.getenv("MODEL_TOKEN", "")
-
 
 # ==========================================
 # 1. KOMUNIKACJA Z MODELEM LLM
