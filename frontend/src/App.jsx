@@ -1,9 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { GoogleLogin } from '@react-oauth/google';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-const STORAGE_KEY_ACCOUNTS = 'financiailly_accounts_v2';
-const STORAGE_KEY_ACTIVE = 'financiailly_active_id_v2';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8081';
 
 const TAX_PROPOSAL = {
   id: 'tax-01',
