@@ -1,6 +1,6 @@
 import uuid
 from datetime import timedelta
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from schemas import (
     AutonomyGovernance,
@@ -60,11 +60,9 @@ def evaluate_credit_facility(
     if shortfall <= 0:
         return None, ""
 
-    # Zaokrąglenie potrzebnego limitu w górę do pełnych 5 000 jednostek waluty
     recommended_limit = float(((int(shortfall) // 5000) + 1) * 5000)
     est_monthly_interest = round(recommended_limit * 0.085 / 12, 2)
 
-    # Sprawdzenie czy w oknie prognozy są wydatki nieobowiązkowe (np. przelew inwestycyjny CHF)
     discretionary = [
         t for t in req.scheduled_transactions
         if req.as_of_date < t.due_date <= req.as_of_date + timedelta(days=req.forecast_days)
@@ -98,7 +96,7 @@ def evaluate_credit_facility(
         amount=recommended_limit,
         currency=req.currency,
         estimated_monthly_cost=est_monthly_interest,
-        explainable_reasoning="",  # Wypełniane przez LLM w warstwie app.py
+        explainable_reasoning="",
     )
     return action, llm_prompt
 
