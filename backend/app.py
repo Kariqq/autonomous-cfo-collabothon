@@ -1,6 +1,8 @@
 import json
 import os
 import re
+import uuid
+from datetime import datetime
 from typing import Any, Dict, List
 
 import requests
@@ -9,11 +11,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from schemas import (
     FinancialContext,
+    FinancialContextFX,
     Invoice,
+    InvoiceFX,
     LiquidityAnalysisRequest,
     ProposedCreditAction,
     ToolOutput,
 )
+from tools.fx_hedging_agent import run_fx_hedging_agent
 from tools.liquidity_agent import run_liquidity_agent
 from tools.tax_agent import run_tax_agent
 
@@ -33,7 +38,12 @@ MODEL_URL = os.getenv("MODEL_URL", "").strip() or _default_url
 MODEL_NAME = os.getenv("MODEL_NAME", "").strip() or "llama-32-3b-instruct"
 MODEL_TOKEN = os.getenv("MODEL_TOKEN", "").strip()
 
+# Pamięć oczekujących decyzji Human-in-the-Loop (Liquidity & FX)
 PENDING_LIQUIDITY_ACTIONS: Dict[str, ProposedCreditAction] = {}
+PENDING_FX_CONTRACTS: Dict[str, Dict[str, Any]] = {}
+
+CONFIRM_WORDS = {"tak", "yes", "ok", "okay", "zgadzam sie", "zgadzam się", "zatwierdzam", "potwierdzam", "confirm", "approve"}
+REJECT_WORDS = {"nie", "no", "anuluj", "odrzucam", "rezygnuje", "rezygnuję", "cancel", "reject"}
 
 
 # ==========================================
@@ -92,20 +102,22 @@ def route_agents_for_query(ctx: FinancialContext) -> List[str]:
         selected.append("tax")
     if any(k in q for k in ["płynnoś", "gotówk", "cash", "kredyt", "faktury", "zaleg", "runway", "liquidity"]):
         selected.append("liquidity")
+    if any(k in q for k in ["walut", "eur", "usd", "kurs", "fx", "hedg", "przewalut"]):
+        selected.append("fx")
 
     valid_selected = [name for name in selected if name in active]
     return valid_selected if valid_selected else list(active.keys())
 
 
 # ==========================================
-# 3. ENDPOINTY REST API (TAX & CFO)
+# 3. ENDPOINTY REST API (TAX, FX & CFO)
 # ==========================================
 
 @app.get("/health")
 def health():
     return {
         "status": "ok",
-        "active_agents": ["tax", "liquidity"],
+        "active_agents": ["tax", "liquidity", "fx_hedging"],
         "model": MODEL_NAME,
         "model_url": MODEL_URL,
     }
@@ -136,6 +148,11 @@ def endpoint_tax_agent(ctx: FinancialContext):
     }
 
 
+@app.post("/cfo/analyze-fx")
+def analyze_fx(ctx: FinancialContextFX):
+    return run_fx_hedging_agent(ctx)
+
+
 @app.post("/cfo/analyze")
 def endpoint_autonomous_cfo(ctx: FinancialContext):
     active_agents = get_active_agents()
@@ -150,7 +167,8 @@ def endpoint_autonomous_cfo(ctx: FinancialContext):
         combined_prompt_context.append(result.prompt_context)
 
     system_prompt = (
-        "Jesteś Autonomicznym Dyrektorem Finansowym (CFO) integrującym raporty od wyspecjalizowanych agentów. "
+        "Jesteś Autonomicznym Dyrektorem Finansowym (CFO) integrującym raporty od wyspecjalizowanych agentów "
+        "(Liquidity, FX Hedging, Tax, Investment). "
         "Zwróć odpowiedź WYŁĄCZNIE jako poprawny obiekt JSON (bez tekstu przed ani po) o strukturze:\n"
         "{\n"
         '  "executive_summary": "3-4 zdania konkretnej diagnozy CFO po polsku z odwołaniem do dokładnych kwot.",\n'
@@ -253,7 +271,119 @@ async def frontend_cfo_chat(
     account: str = Form("SME Client"),
     file: UploadFile | None = File(None),
 ):
-    """Endpoint dopasowany 1:1 do FormData z handleSend() w frontend/src/App.jsx."""
+    """Endpoint dopasowany 1:1 do FormData z handleSend() w frontend/src/App.jsx (obsługuje FX oraz Tax)."""
+    clean_prompt = prompt.strip().lower().rstrip(".!?")
+    account_key = account.strip().lower()
+
+    # 1. Obsługa odpowiedzi "tak" lub "nie" na oczekującą ofertę Commerzbank FX Forward
+    if account_key in PENDING_FX_CONTRACTS:
+        pending_rec = PENDING_FX_CONTRACTS[account_key]
+
+        if clean_prompt in CONFIRM_WORDS:
+            del PENDING_FX_CONTRACTS[account_key]
+            ticket_id = f"CB-FX-{uuid.uuid4().hex[:8].upper()}"
+            q = pending_rec["quote_details"]
+            deal_info = {
+                "status": "EXECUTED_SIMULATED",
+                "deal_ticket_id": ticket_id,
+                "bank": "Commerzbank AG",
+                "product_id": pending_rec["product_id"],
+                "booked_at": datetime.utcnow().isoformat() + "Z",
+                "quote_details": q,
+            }
+            return {
+                "reply": (
+                    f"**Umowa Commerzbank FX Forward została zawarta.**\n\n"
+                    f"- **Numer transakcji:** `{ticket_id}`\n"
+                    f"- **Para walutowa:** {q['pair']} ({q['direction']})\n"
+                    f"- **Kwota zabezpieczenia:** {q['notional_amount_fc']:,.2f}\n"
+                    f"- **Zablokowany kurs Forward:** {q['guaranteed_forward_rate']} "
+                    f"(wartość: {q['locked_value_base']:,.2f} {q['base_currency']})\n\n"
+                    f"Ryzyko walutowe dla tej ekspozycji zostało zneutralizowane."
+                ),
+                "deal_executed": deal_info,
+            }
+
+        if clean_prompt in REJECT_WORDS:
+            del PENDING_FX_CONTRACTS[account_key]
+            return {
+                "reply": "Odrzucono propozycję zawarcia umowy Commerzbank FX Forward. Kurs pozostaje niezabezpieczony.",
+                "deal_executed": None,
+            }
+
+    # 2. Uruchomienie FX Hedging Agenta, gdy wybrano agent="fx" lub zapytanie dotyczy walut
+    is_fx_query = (
+        agent.lower() in {"fx", "fx_hedging", "hedging"}
+        or any(w in clean_prompt for w in ["walut", "fx", "forward", "kurs", "chf", "usd", "hedg", "currency"])
+    )
+
+    if is_fx_query:
+        fx_ctx = FinancialContextFX(
+            company_name=account,
+            base_currency="EUR",
+            cash_balance=342500.0,
+            monthly_burn_rate=45000.0,
+            user_query=prompt,
+            invoices=[
+                InvoiceFX(
+                    id="INV-FX-01",
+                    contractor="Swiss Precision Supplier AG",
+                    amount=12000.0,
+                    vat_rate=0.0,
+                    currency="CHF",
+                    due_in_days=30,
+                    type="payable",
+                ),
+                InvoiceFX(
+                    id="INV-FX-02",
+                    contractor="US Enterprise Client",
+                    amount=4500.0,
+                    vat_rate=0.0,
+                    currency="USD",
+                    due_in_days=45,
+                    type="receivable",
+                ),
+            ],
+        )
+        fx_report = run_fx_hedging_agent(fx_ctx)
+
+        if fx_report.recommendations:
+            rec = fx_report.recommendations[0]
+            PENDING_FX_CONTRACTS[account_key] = rec
+            q = rec["quote_details"]
+
+            system_prompt = (
+                "You are the FX Hedging AI Agent inside FinancAI.lly powered by Commerzbank. "
+                "Explain the detected currency exposure and the recommended Commerzbank FX Forward contract clearly and concisely. "
+                "Do not use emojis. "
+                "Reply in the exact same language as the user's question (Polish or English). "
+                "Always end by asking the user explicitly if they want to conclude this contract (e.g. 'Czy chcesz zawrzeć tę umowę? Odpisz: tak / nie')."
+            )
+            user_prompt = (
+                f"Account: {account}\n"
+                f"FX Telemetry: {fx_report.prompt_context}\n"
+                f"Recommended Contract: {json.dumps(rec, ensure_ascii=False)}\n"
+                f"User message: {prompt}"
+            )
+
+            try:
+                llm_reply = call_llm(system_prompt, user_prompt, max_tokens=550)
+            except Exception:
+                llm_reply = (
+                    f"{rec['details']}\n\n"
+                    f"**Proponowany produkt:** {rec['product_name']}\n"
+                    f"**Gwarantowany kurs:** {q['guaranteed_forward_rate']} "
+                    f"(kwota: {q['notional_amount_fc']:,.2f})\n\n"
+                    f"**Czy chcesz zawrzeć tę umowę? (odpisz: tak / nie)**"
+                )
+
+            return {
+                "reply": llm_reply,
+                "fx_telemetry": fx_report.model_dump(),
+                "pending_approval": True,
+            }
+
+    # 3. Domyślnie: Tax Prep AI Agent (z bezpieczną obsługą plików CSV/PDF bez halucynacji R&D)
     file_context = ""
     has_file = bool(file and file.filename)
 
