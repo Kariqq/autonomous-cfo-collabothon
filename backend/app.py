@@ -129,7 +129,11 @@ def parse_prompt_to_financials(prompt: str, file_snippet: str = "") -> Dict[str,
 
     clauses = re.split(r"[.;\n]|(?:\s+oraz\s+)|(?:\s+and\s+)|(?:\s+a\s+za\s+)", text)
     for clause in clauses:
-        if any(skip in clause.lower() for skip in ["na koncie", "bufor", "safety buffer", "w ciągu najbliższych", "next 30 days"]):
+        if any(skip in clause.lower() for skip in [
+            "na koncie", "in my account", "in account", "balance is", "i have",
+            "bufor", "safety buffer", "buffer",
+            "w ciągu najbliższych", "next 30 days", "in the next",
+        ]):
             continue
 
         amt_match = re.search(r"([\d][\d\s]*(?:[.,]\d+)?)\s*(PLN|EUR|USD|CHF|GBP)", clause, re.IGNORECASE)
@@ -567,13 +571,14 @@ async def frontend_cfo_chat(
                     due_date=today + timedelta(days=due_days),
                     counterparty=inv.get("contractor") or f"Vendor {idx+1}",
                     amount=signed_amt,
+                    category=inv.get("category") or "operations",
                 )
             )
 
         if not scheduled_txs and not has_custom:
             scheduled_txs = [
-                ScheduledTransaction(id="TX-01", due_date=today + timedelta(days=10), counterparty="Equipment Supplier", amount=-32000.0),
-                ScheduledTransaction(id="TX-02", due_date=today + timedelta(days=15), counterparty="Office Rent", amount=-4000.0),
+                ScheduledTransaction(id="TX-01", due_date=today + timedelta(days=10), counterparty="Equipment Supplier", amount=-32000.0, category="equipment"),
+                ScheduledTransaction(id="TX-02", due_date=today + timedelta(days=15), counterparty="Office Rent", amount=-4000.0, category="rent"),
             ]
 
         liq_req = LiquidityAnalysisRequest(
