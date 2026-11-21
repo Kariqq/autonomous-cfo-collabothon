@@ -8,8 +8,14 @@ from typing import Any, Dict, List
 import requests
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from tools.bank_connector import (
+    BANK_SESSIONS,
+    complete_bank_auth,
+    fetch_bank_financials,
+    start_german_sandbox_auth,
+)
 
 from schemas import (
     FinancialContext,
@@ -457,6 +463,20 @@ def endpoint_liquidity_decide(action_id: str, approve: bool = True):
 # 5. FRONTEND ENDPOINTS (frontend/src/App.jsx)
 # ==========================================
 
+@app.get("/api/bank/connect")
+def bank_connect(account: str = "Pizza Palace GmbH"):
+    """Zwraca link logowania do niemieckiego banku testowego Mock ASPSP (DE)."""
+    auth_url = start_german_sandbox_auth(account_key=account.strip().lower())
+    return {"auth_url": auth_url}
+
+
+@app.get("/api/bank/callback")
+def bank_callback(code: str, state: str):
+    """Odbiera potwierdzenie z Enable Banking i zapisuje sesję rachunku."""
+    account_key = state.split(":")[0] if ":" in state else "pizza palace gmbh"
+    complete_bank_auth(code=code, account_key=account_key)
+    return RedirectResponse(url="/?bank_connected=true")
+
 @app.post("/api/cfo/chat")
 async def frontend_cfo_chat(
     prompt: str = Form(...),
@@ -562,6 +582,15 @@ async def frontend_cfo_chat(
     extracted = parse_prompt_to_financials(prompt, file_context)
     has_custom = bool(extracted.get("has_custom_numbers")) or bool(extracted.get("invoices"))
 
+    bank_cash_eur, bank_tax_invs, bank_fx_invs, bank_sched_txs = fetch_bank_financials(account_key)
+
+    if account_key not in BANK_SESSIONS and not has_custom and not has_file:
+        return {
+            "reply": "Your German bank account is not connected yet. Please connect your bank sandbox first or enter your amounts in the chat.",
+            "requires_bank_connection": True,
+            "chart": None,
+        }
+
     agent_low = agent.strip().lower()
     is_fx_query = (
         agent_low in {"fx", "fx_hedging", "hedging"}
@@ -602,32 +631,13 @@ async def frontend_cfo_chat(
         ]
 
         if not fx_invoices and not has_custom and not has_file:
-            fx_invoices = [
-                InvoiceFX(
-                    id="INV-FX-01",
-                    contractor="Swiss Precision Supplier AG",
-                    amount=12000.0,
-                    vat_rate=0.0,
-                    currency="CHF",
-                    due_in_days=30,
-                    type="payable",
-                ),
-                InvoiceFX(
-                    id="INV-FX-02",
-                    contractor="US Enterprise Client",
-                    amount=4500.0,
-                    vat_rate=0.0,
-                    currency="USD",
-                    due_in_days=45,
-                    type="receivable",
-                ),
-            ]
+            fx_invoices = bank_fx_invs
 
         fx_ctx = FinancialContextFX(
             company_name=account,
             base_currency=base_curr,
-            cash_balance=float(extracted.get("cash_balance") if extracted.get("cash_balance") is not None else 342500.0),
-            monthly_burn_rate=float(extracted.get("monthly_burn_rate") if extracted.get("monthly_burn_rate") is not None else 45000.0),
+            cash_balance=float(extracted.get("cash_balance") if extracted.get("cash_balance") is not None else bank_cash_eur),
+            monthly_burn_rate=float(extracted.get("monthly_burn_rate") if extracted.get("monthly_burn_rate") is not None else 0.0),
             user_query=prompt,
             invoices=fx_invoices,
         )
@@ -682,8 +692,8 @@ async def frontend_cfo_chat(
     if is_liquidity_query:
         today = date.today()
         curr = (extracted.get("base_currency") or "EUR").upper()
-        balance = float(extracted.get("cash_balance") if extracted.get("cash_balance") is not None else 25000.0)
-        buffer = float(extracted.get("safety_buffer") if extracted.get("safety_buffer") is not None else 10000.0)
+        balance = float(extracted.get("cash_balance") if extracted.get("cash_balance") is not None else bank_cash_eur)
+        buffer = float(extracted.get("safety_buffer") if extracted.get("safety_buffer") is not None else 5000.0)
         horizon = int(extracted.get("forecast_days") or 30)
 
         scheduled_txs: List[ScheduledTransaction] = []
@@ -728,22 +738,7 @@ async def frontend_cfo_chat(
             )
 
         if not scheduled_txs and not has_custom and not has_file:
-            scheduled_txs = [
-                ScheduledTransaction(
-                    due_date=today + timedelta(days=10),
-                    counterparty="Equipment Supplier",
-                    category="EQUIPMENT",
-                    amount=-32000.0,
-                    is_discretionary=True,
-                ),
-                ScheduledTransaction(
-                    due_date=today + timedelta(days=15),
-                    counterparty="Office Rent",
-                    category="RENT",
-                    amount=-4000.0,
-                    is_discretionary=False,
-                ),
-            ]
+            scheduled_txs = bank_sched_txs
 
         if tax_invoices:
             burn_for_tax = float(extracted.get("monthly_burn_rate") if extracted.get("monthly_burn_rate") is not None else 0.0)
@@ -857,9 +852,7 @@ async def frontend_cfo_chat(
         }
 
     # 4. Default: Tax Prep AI Agent
-    is_lukas = "lukas" in account.lower()
-    default_cash = 890000.0 if is_lukas else 342500.0
-    cash_eur = float(extracted.get("cash_balance") if extracted.get("cash_balance") is not None else default_cash)
+    cash_eur = float(extracted.get("cash_balance") if extracted.get("cash_balance") is not None else bank_cash_eur)
 
     parsed_tax_invoices = [
         Invoice(
@@ -877,21 +870,17 @@ async def frontend_cfo_chat(
     ]
 
     if not parsed_tax_invoices and not has_custom and not has_file:
-        parsed_tax_invoices = [
-            Invoice(id="FV/01", contractor="Enterprise Client", amount=120000.0, vat_rate=0.19, due_in_days=10, type="receivable"),
-            Invoice(id="FV/02", contractor="AI & Cloud R&D Lab", amount=40000.0, vat_rate=0.19, due_in_days=5, type="payable", category="R&D"),
-        ]
+        parsed_tax_invoices = bank_tax_invs
 
-    default_burn = 0.0 if (has_custom or has_file) else 45000.0
-    burn_rate = float(extracted.get("monthly_burn_rate") if extracted.get("monthly_burn_rate") is not None else default_burn)
+    burn_rate = float(extracted.get("monthly_burn_rate") if extracted.get("monthly_burn_rate") is not None else 0.0)
 
     demo_ctx = FinancialContext(
         company_name=account,
         currency="EUR",
         cash_balance_eur=cash_eur,
         monthly_burn_rate_eur=burn_rate,
-        cit_rate=0.09,
-        day_of_month=20,
+        cit_rate=0.30,
+        day_of_month=date.today().day,
         user_query=prompt,
         invoices=parsed_tax_invoices,
     )
