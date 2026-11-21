@@ -152,7 +152,7 @@ def parse_prompt_to_financials(prompt: str, file_snippet: str = "") -> Dict[str,
             due_days = int(future_match.group(1))
 
         vat_match = re.search(r"(\d+)\s*%\s*vat", c_low)
-        vat_rate = (int(vat_match.group(1)) / 100.0) if vat_match else (0.23 if currency == "PLN" else 0.0)
+        vat_rate = (int(vat_match.group(1)) / 100.0) if vat_match else (0.19 if currency == "EUR" else 0.0)
         category = "R&D" if any(w in c_low for w in ["r&d", "b+r", "oprogramowani", "software", "badani", "research"]) else "operations"
 
         result["invoices"].append({
@@ -288,8 +288,8 @@ def endpoint_autonomous_cfo(ctx: FinancialContext):
 
     user_prompt = (
         f"Company: {ctx.company_name}\n"
-        f"Available Cash: {ctx.cash_balance_pln:,.2f} {currency} | "
-        f"Monthly Fixed Bills: {ctx.monthly_burn_rate_pln:,.2f} {currency}\n"
+        f"Available Cash: {ctx.cash_balance_eur:,.2f} {currency} | "
+        f"Monthly Fixed Bills: {ctx.monthly_burn_rate_eur:,.2f} {currency}\n"
         f"User Question: {ctx.user_query or 'Full money checkup and simple savings plan.'}\n\n"
         f"Agent Reports:\n" + "\n".join(combined_prompt_context) + "\n\n"
         f"Detailed Numbers:\n{json.dumps(all_recommendations, ensure_ascii=False, indent=2)}"
@@ -566,14 +566,15 @@ async def frontend_cfo_chat(
                     id=f"TX-{idx+1:02d}",
                     due_date=today + timedelta(days=due_days),
                     counterparty=inv.get("contractor") or f"Vendor {idx+1}",
+                    category=inv.get("category") or "OPERATIONS",
                     amount=signed_amt,
                 )
             )
 
         if not scheduled_txs and not has_custom:
             scheduled_txs = [
-                ScheduledTransaction(id="TX-01", due_date=today + timedelta(days=10), counterparty="Equipment Supplier", amount=-32000.0),
-                ScheduledTransaction(id="TX-02", due_date=today + timedelta(days=15), counterparty="Office Rent", amount=-4000.0),
+                ScheduledTransaction(due_date=today + timedelta(days=10), counterparty="Equipment Supplier", amount=-32000.0),
+                ScheduledTransaction(due_date=today + timedelta(days=15), counterparty="Office Rent", amount=-4000.0),
             ]
 
         liq_req = LiquidityAnalysisRequest(
@@ -612,15 +613,15 @@ async def frontend_cfo_chat(
 
     # 4. Default: Tax Prep AI Agent
     is_lukas = "lukas" in account.lower()
-    cash_pln = float(extracted.get("cash_balance") or (890000.0 if is_lukas else 342500.0))
+    cash_eur = float(extracted.get("cash_balance") or (890000.0 if is_lukas else 342500.0))
 
     parsed_tax_invoices = [
         Invoice(
             id=f"FV/{idx+1:02d}",
             contractor=inv.get("contractor") or f"Client {idx+1}",
             amount=float(inv.get("amount", 0)),
-            vat_rate=float(inv.get("vat_rate") if inv.get("vat_rate") is not None else 0.23),
-            currency="PLN",
+            vat_rate=float(inv.get("vat_rate") if inv.get("vat_rate") is not None else 0.19),
+            currency="EUR",
             due_in_days=int(inv.get("due_in_days") if inv.get("due_in_days") is not None else 14),
             type=inv.get("type") or "payable",
             category=inv.get("category") or "operations",
@@ -631,15 +632,15 @@ async def frontend_cfo_chat(
 
     if not parsed_tax_invoices and not has_custom and not has_file:
         parsed_tax_invoices = [
-            Invoice(id="FV/01", contractor="Enterprise Client", amount=120000.0, vat_rate=0.23, due_in_days=10, type="receivable"),
-            Invoice(id="FV/02", contractor="AI & Cloud R&D Lab", amount=40000.0, vat_rate=0.23, due_in_days=5, type="payable", category="R&D"),
+            Invoice(id="FV/01", contractor="Enterprise Client", amount=120000.0, vat_rate=0.19, due_in_days=10, type="receivable"),
+            Invoice(id="FV/02", contractor="AI & Cloud R&D Lab", amount=40000.0, vat_rate=0.19, due_in_days=5, type="payable", category="R&D"),
         ]
 
     burn_rate = 0.0 if has_custom else 45000.0
     demo_ctx = FinancialContext(
         company_name=account,
-        cash_balance_pln=cash_pln,
-        monthly_burn_rate_pln=burn_rate,
+        cash_balance_eur=cash_eur,
+        monthly_burn_rate_eur=burn_rate,
         cit_rate=0.09,
         day_of_month=20,
         user_query=prompt,
