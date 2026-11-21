@@ -37,6 +37,29 @@ const TAX_PROPOSAL = {
   governance: 'REQUIRES USER APPROVAL',
 };
 
+function renderFormattedMessage(text) {
+  // Remove raw ** markers so LLM-wide bolding doesn't bold entire paragraphs
+  const cleanedText = String(text).replace(/\*\*/g, '');
+
+  // Match only numbers, currencies (€342,500, -€38,400, +€14,500), and percentages (0%, 23%)
+  const numberRegex =
+    /((?:[+-]\s*)?(?:[€$£]\s*)?\d[\d.,]*(?:\s*(?:EUR|PLN|USD|CHF|%))?)/g;
+
+  return cleanedText.split(numberRegex).map((part, index) => {
+    if (!part) return null;
+
+    if (/\d/.test(part)) {
+      return (
+        <strong key={index} className="font-bold text-white">
+          {part}
+        </strong>
+      );
+    }
+
+    return <React.Fragment key={index}>{part}</React.Fragment>;
+  });
+}
+
 export default function App() {
   const [accounts, setAccounts] = useState(() => {
     try {
@@ -84,7 +107,7 @@ export default function App() {
     {
       role: 'assistant',
       content:
-        'Tax Prep Agent active. I monitor your transactions to coordinate advance tax payments and identify deductible optimization opportunities. Review the recommendation above, upload receipts/invoices, or ask a tax question.',
+        "Hi! I'm here to help you manage your finances. Ask me a question or upload a receipt/invoice to get started.",
     },
   ]);
 
@@ -635,13 +658,13 @@ export default function App() {
                   className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   <div
-                    className={`max-w-2xl px-4 py-3 rounded-xl text-sm leading-relaxed ${
+                    className={`max-w-2xl px-4 py-3 rounded-xl text-sm leading-relaxed whitespace-pre-wrap ${
                       msg.role === 'user'
                         ? 'bg-white text-neutral-950 font-medium'
-                        : 'bg-neutral-800 text-neutral-100 border border-neutral-700'
+                        : 'bg-neutral-800 text-neutral-200 font-normal border border-neutral-700'
                     }`}
                   >
-                    {msg.content}
+                    {msg.role === 'assistant' ? renderFormattedMessage(msg.content) : msg.content}
                   </div>
                 </div>
               ))}
