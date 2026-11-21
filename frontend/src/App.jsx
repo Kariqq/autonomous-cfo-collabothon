@@ -28,13 +28,17 @@ const TESTER_ACCOUNT = {
 function renderFormattedMessage(text) {
   const cleanedText = String(text).replace(/\*\*/g, '');
 
-  const numberRegex =
-    /((?:[+-]\s*)?(?:[€$£]\s*)?\d[\d.,]*(?:\s*(?:EUR|PLN|USD|CHF|%))?)/g;
+  // Matches standalone numbers/currencies/percentages only (ignores alphanumeric IDs like "34fej3h" or "INV-01")
+  const standaloneNumberRegex =
+    /((?<![A-Za-z0-9_-])(?:[+-]\s*)?(?:[€$£]\s*)?\d[\d.,]*(?:\s*(?:EUR|PLN|USD|CHF|%))?(?![A-Za-z0-9_-]))/g;
 
-  return cleanedText.split(numberRegex).map((part, index) => {
+  return cleanedText.split(standaloneNumberRegex).map((part, index) => {
     if (!part) return null;
 
-    if (/\d/.test(part)) {
+    const isStandaloneNumber =
+      /^(?:[+-]\s*)?(?:[€$£]\s*)?\d[\d.,]*(?:\s*(?:EUR|PLN|USD|CHF|%))?$/.test(part);
+
+    if (isStandaloneNumber) {
       return (
         <strong key={index} className="font-bold text-white">
           {part}
@@ -87,6 +91,7 @@ export default function App() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const fileInputRef = useRef(null);
+  const messagesEndRef = useRef(null);
 
   const [messages, setMessages] = useState([
     {
@@ -112,6 +117,10 @@ export default function App() {
       localStorage.removeItem(STORAGE_KEY_ACTIVE);
     }
   }, [isSignedIn, activeAccountId]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, loading]);
 
   const activeAccount = accounts.find((a) => a.id === activeAccountId) || null;
 
@@ -535,6 +544,7 @@ export default function App() {
                   Tax Prep Agent reasoning on OpenShift AI...
                 </div>
               )}
+              <div ref={messagesEndRef} />
             </div>
           </div>
 
