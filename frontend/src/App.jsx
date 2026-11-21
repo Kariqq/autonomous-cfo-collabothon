@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? "";
+const API_BASE_URL =
+  import.meta.env.VITE_API_URL ||
+  'https://cfo-backend-api-autonomous-cfo-collabothon.apps.ocp.fr79k.sandbox786.opentlc.com';
 const STORAGE_KEY_ACCOUNTS = 'financiailly_accounts_v1';
 const STORAGE_KEY_ACTIVE = 'financiailly_active_id_v1';
 
@@ -23,23 +25,9 @@ const TESTER_ACCOUNT = {
   provider: 'tester',
 };
 
-const TAX_PROPOSAL = {
-  id: 'tax-01',
-  title: 'Q3 Advance Corporate Tax Adjustment Opportunity',
-  autonomousAnalysis:
-    'Current Q3 operating profit is 11% below projection due to one-off equipment maintenance and deductible energy costs.',
-  recommendation:
-    'Submit advance corporate tax prepayment reduction request (-€14,500) before the 10th of next month.',
-  whyItMakesSense:
-    'Prevents overpaying tax installments now, keeping €14,500 liquid in your operating account until annual tax reconciliation.',
-  governance: 'REQUIRES USER APPROVAL',
-};
-
 function renderFormattedMessage(text) {
-  // Remove raw ** markers so LLM-wide bolding doesn't bold entire paragraphs
   const cleanedText = String(text).replace(/\*\*/g, '');
 
-  // Match only numbers, currencies (€342,500, -€38,400, +€14,500), and percentages (0%, 23%)
   const numberRegex =
     /((?:[+-]\s*)?(?:[€$£]\s*)?\d[\d.,]*(?:\s*(?:EUR|PLN|USD|CHF|%))?)/g;
 
@@ -95,7 +83,6 @@ export default function App() {
   const [authPassword, setAuthPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
 
-  const [decision, setDecision] = useState('pending');
   const [attachedFile, setAttachedFile] = useState(null);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -151,29 +138,6 @@ export default function App() {
   const addLog = (label) => {
     const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     setHistoryLog((prev) => [{ id: Date.now(), time: now, label }, ...prev]);
-  };
-
-  const handleDecision = (choice) => {
-    if (decision !== 'pending' || !activeAccount) return;
-    setDecision(choice);
-
-    const statusText =
-      choice === 'approved'
-        ? `Approved Tax Prep action (${activeAccount.sandboxMode ? 'Simulated' : 'Executed'})`
-        : 'Declined Tax Prep proposal';
-
-    addLog(statusText);
-
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: 'assistant',
-        content:
-          choice === 'approved'
-            ? `✓ Action approved for ${activeAccount.name}: "${TAX_PROPOSAL.recommendation}". Logged in Context & History.`
-            : `Cancelled "${TAX_PROPOSAL.recommendation}". No tax filing changes were submitted.`,
-      },
-    ]);
   };
 
   const handleTesterQuickLogin = () => {
@@ -470,15 +434,6 @@ export default function App() {
                 {activeAccount.taxSavings}
               </div>
             </div>
-            <div className="h-7 w-px bg-neutral-800 hidden sm:block" />
-            <div>
-              <div className="text-[11px] text-neutral-500 uppercase tracking-wider">
-                Governance
-              </div>
-              <div className="text-xs font-mono text-neutral-200 mt-0.5">
-                {activeAccount.sandboxMode ? 'SANDBOX • APPROVAL' : 'LIVE • APPROVAL'}
-              </div>
-            </div>
           </div>
         </header>
 
@@ -516,27 +471,7 @@ export default function App() {
       </div>
 
       <div className="flex-1 min-h-0 grid grid-cols-12 gap-3">
-        <aside className="col-span-12 lg:col-span-3 min-h-0 flex flex-col gap-3">
-          <div className="rounded-xl bg-neutral-900 border border-neutral-800 p-4 shrink-0">
-            <div className="text-[11px] font-mono uppercase tracking-widest text-neutral-500 mb-3">
-              Active Agent
-            </div>
-            <div className="p-3 rounded-lg bg-neutral-800/90 border border-neutral-600 text-white flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shrink-0" />
-                <div>
-                  <div className="text-sm font-semibold leading-tight">Tax Prep</div>
-                  <div className="text-[10px] text-neutral-400">
-                    Advance Tax & Deduction Optimizer
-                  </div>
-                </div>
-              </div>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 font-semibold">
-                Save €14.5k
-              </span>
-            </div>
-          </div>
-
+        <aside className="col-span-12 lg:col-span-3 min-h-0 flex flex-col">
           <div className="flex-1 min-h-0 rounded-xl bg-neutral-900 border border-neutral-800 p-4 flex flex-col">
             <div className="text-[11px] font-mono uppercase tracking-widest text-neutral-500 mb-2">
               Context & History
@@ -575,80 +510,9 @@ export default function App() {
                 — Advance Tax & Deduction Optimizer
               </span>
             </div>
-            <div className="flex items-center gap-2 text-[11px] font-mono">
-              <span className="px-2.5 py-1 rounded bg-neutral-800 text-neutral-200 border border-neutral-700">
-                {TAX_PROPOSAL.governance}
-              </span>
-              <span className="px-2.5 py-1 rounded bg-neutral-800 text-neutral-400 border border-neutral-700">
-                {activeAccount.sandboxMode ? 'SIMULATED SANDBOX' : 'LIVE EXECUTION'}
-              </span>
-            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto p-5 space-y-4">
-            <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-700 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-mono uppercase tracking-wider text-neutral-200 font-semibold">
-                  Proactive Finding • {TAX_PROPOSAL.title}
-                </span>
-                {decision !== 'pending' && (
-                  <span
-                    className={`text-xs font-mono px-2.5 py-0.5 rounded border ${
-                      decision === 'approved'
-                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50 font-semibold'
-                        : 'bg-rose-500/20 text-rose-300 border-rose-500/50 font-semibold'
-                    }`}
-                  >
-                    {decision === 'approved' ? '✓ APPROVED' : '✕ DECLINED'}
-                  </span>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-                <div className="p-3 rounded-lg bg-neutral-900 border border-neutral-800">
-                  <div className="text-neutral-400 font-mono text-[11px] mb-1">
-                    01 / AUTONOMOUS ANALYSIS
-                  </div>
-                  <p className="text-neutral-300 leading-relaxed">
-                    {TAX_PROPOSAL.autonomousAnalysis}
-                  </p>
-                </div>
-                <div className="p-3 rounded-lg bg-neutral-900 border border-neutral-800">
-                  <div className="text-neutral-200 font-mono text-[11px] mb-1">
-                    02 / PROPOSED ACTION
-                  </div>
-                  <p className="text-neutral-200 leading-relaxed">
-                    {TAX_PROPOSAL.recommendation}
-                  </p>
-                </div>
-                <div className="p-3 rounded-lg bg-neutral-900 border border-neutral-800">
-                  <div className="text-neutral-400 font-mono text-[11px] mb-1">
-                    03 / EXPLAINABLE LOGIC
-                  </div>
-                  <p className="text-neutral-300 leading-relaxed">
-                    {TAX_PROPOSAL.whyItMakesSense}
-                  </p>
-                </div>
-              </div>
-
-              {decision === 'pending' && (
-                <div className="flex items-center justify-end gap-2 pt-1">
-                  <button
-                    onClick={() => handleDecision('rejected')}
-                    className="px-3.5 py-1.5 rounded-lg text-xs bg-neutral-800 hover:bg-neutral-700 text-neutral-300 border border-neutral-700 transition"
-                  >
-                    Decline
-                  </button>
-                  <button
-                    onClick={() => handleDecision('approved')}
-                    className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-white hover:bg-neutral-200 text-neutral-950 transition"
-                  >
-                    Approve & Simulate Action
-                  </button>
-                </div>
-              )}
-            </div>
-
             <div className="space-y-3">
               {messages.map((msg, idx) => (
                 <div
