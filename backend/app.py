@@ -151,7 +151,7 @@ def parse_prompt_to_financials(prompt: str, file_snippet: str = "") -> Dict[str,
         result["base_currency"] = base_match.group(1).upper()
 
     bal_match = re.search(
-        r"(?:mam\s+na\s+koncie|saldo|got[óo]wk[ia]|balance\s+is|have)\s*[^\d]{0,20}([\d][\d\s,.]*)\s*(PLN|EUR|USD|CHF|GBP)",
+        r"(?:mam\s+na\s+koncie|saldo|got[óo]wk[ia]|(?:cash\s+)?balance\s+is|i\s+have)\s*[^\d]{0,20}([\d][\d\s,.]*)\s*(PLN|EUR|USD|CHF|GBP)",
         text,
         re.IGNORECASE,
     )
@@ -187,14 +187,25 @@ def parse_prompt_to_financials(prompt: str, file_snippet: str = "") -> Dict[str,
     if days_match:
         result["forecast_days"] = int(days_match.group(1))
 
-    clauses = re.split(r"[.;\n]|(?:\s+oraz\s+)|(?:\s+and\s+)|(?:\s+a\s+za\s+)", text)
+    # Split clauses by sentence terminators, conjunctions, or commas (not between digits)
+    clauses = re.split(
+        r"[.;\n]|(?<!\d),(?!\d)|(?:\s+oraz\s+)|(?:\s+and\s+)|(?:\s+a\s+za\s+)",
+        text,
+    )
     for clause in clauses:
-        if any(skip in clause.lower() for skip in [
-            "na koncie", "in my account", "in account", "balance is", "i have",
-            "bufor", "safety buffer", "buffer", "cushion",
-            "burn rate", "fixed bills", "monthly expenses",
-            "w ciągu najbliższych", "next 30 days", "in the next",
-        ]):
+        c_low = clause.lower().strip()
+        if not c_low:
+            continue
+
+        # Skip pure balance / buffer / burn-rate clauses (unless they explicitly mention an invoice)
+        if "invoice" not in c_low and "faktur" not in c_low and any(
+            skip in c_low
+            for skip in [
+                "na koncie", "in my account", "in account", "balance is", "i have",
+                "bufor", "safety buffer", "buffer", "cushion",
+                "burn rate", "fixed bills", "monthly expenses",
+            ]
+        ):
             continue
 
         amt_match = re.search(r"([\d][\d\s,.]*)\s*(PLN|EUR|USD|CHF|GBP)", clause, re.IGNORECASE)
@@ -203,12 +214,14 @@ def parse_prompt_to_financials(prompt: str, file_snippet: str = "") -> Dict[str,
 
         amount = _parse_amount(amt_match.group(1))
         currency = amt_match.group(2).upper()
-        c_low = clause.lower()
 
-        is_receivable = any(w in c_low for w in [
-            "sprzedaż", "sprzedaz", "wystawiłem", "wystawilem", "klient",
-            "wpływ", "należnoś", "sales", "client", "receivable", "owed to", "income",
-        ])
+        is_receivable = any(
+            w in c_low
+            for w in [
+                "sprzedaż", "sprzedaz", "wystawiłem", "wystawilem", "klient",
+                "wpływ", "należnoś", "sales", "client", "receivable", "owed to", "income",
+            ]
+        )
         inv_type = "receivable" if is_receivable else "payable"
 
         due_days = 14
@@ -921,10 +934,30 @@ async def frontend_cfo_chat(
     tax_report = run_tax_agent(demo_ctx)
 
     m = tax_report.metrics or {}
+    recs = tax_report.recommendations or []
+
     cit_val = float(m.get("cit_advance_to_pay_eur") or m.get("cit_payable_eur") or m.get("cit_eur") or 0.0)
     vat_val = float(m.get("vat_to_pay_eur") or m.get("net_vat_eur") or m.get("vat_eur") or 0.0)
     rd_val = float(m.get("rd_tax_credit_eur") or m.get("rd_deduction_eur") or m.get("b_r_relief_eur") or 0.0)
     sav_val = float(m.get("estimated_tax_savings_eur") or m.get("total_tax_savings_eur") or m.get("tax_savings_eur") or 0.0)
+
+    # Extract R&D grant / tax savings from recommendations when not stored directly in metrics
+    for rec in recs:
+        if isinstance(rec, dict):
+            rec_savings = float(
+                rec.get("potential_savings_eur")
+                or rec.get("savings_eur")
+                or rec.get("amount_eur")
+                or rec.get("grant_amount_eur")
+                or 0.0
+            )
+            rec_code = str(rec.get("code") or rec.get("type") or rec.get("title") or "").lower()
+            if "rd" in rec_code or "r&d" in rec_code or "research" in rec_code or "b+r" in rec_code:
+                rd_val = max(rd_val, rec_savings)
+            sav_val = max(sav_val, rec_savings)
+
+    if sav_val == 0.0 and rd_val > 0.0:
+        sav_val = rd_val
 
     tax_bars = [
         {"label": "CIT Advance", "amount": round(cit_val, 2), "kind": "liability"},
