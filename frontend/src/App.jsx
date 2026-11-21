@@ -25,6 +25,9 @@ const TESTER_ACCOUNT = {
   provider: 'tester',
 };
 
+const ADMIN_BLOCK_REGEX =
+  /(\[\s*(admin|system|root|sudo|developer|override)[^\]]*\])|(\b(admin\s*(access|mode|override|privileges?)|i\s*am\s*(an?\s*)?admin(istrator)?|enter\s*admin|jestem\s*admin(em|istratorem)?|tryb\s*admin(a|istratora)?|developer\s*mode|sudo)\b)/i;
+
 function renderFormattedMessage(text) {
   const cleanedText = String(text).replace(/\*\*/g, '');
 
@@ -89,6 +92,7 @@ export default function App() {
 
   const [attachedFile, setAttachedFile] = useState(null);
   const [input, setInput] = useState('');
+  const [inputError, setInputError] = useState('');
   const [loading, setLoading] = useState(false);
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
@@ -253,6 +257,12 @@ export default function App() {
   const handleSend = async (e) => {
     e.preventDefault();
     if ((!input.trim() && !attachedFile) || loading || !activeAccount) return;
+
+    if (ADMIN_BLOCK_REGEX.test(input)) {
+      setInputError('Admin mode does not exist. Please enter a standard financial question.');
+      return;
+    }
+    setInputError('');
 
     const userText = input.trim() || `Analyze tax document: ${attachedFile.name}`;
     const fileNote = attachedFile ? ` [Attached: ${attachedFile.name}]` : '';
@@ -549,6 +559,12 @@ export default function App() {
           </div>
 
           <div className="p-4 border-t border-neutral-800 bg-neutral-900 shrink-0">
+            {inputError && (
+              <div className="mb-2 text-xs font-mono text-rose-400">
+                {inputError}
+              </div>
+            )}
+
             {attachedFile && (
               <div className="mb-2 inline-flex items-center gap-2 px-3 py-1 rounded bg-neutral-800 border border-neutral-700 text-xs font-mono text-neutral-200">
                 <span>📎 {attachedFile.name}</span>
@@ -585,14 +601,22 @@ export default function App() {
               <input
                 type="text"
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (ADMIN_BLOCK_REGEX.test(val)) {
+                    setInputError('Admin mode does not exist. Please ask a standard financial question.');
+                  } else {
+                    setInputError('');
+                  }
+                  setInput(val);
+                }}
                 placeholder="Ask Tax Prep Agent or attach receipts/invoices..."
                 className="flex-1 bg-neutral-950 border border-neutral-700 rounded-lg px-4 py-2.5 text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-neutral-400"
               />
 
               <button
                 type="submit"
-                disabled={loading}
+                disabled={loading || Boolean(inputError)}
                 className="px-5 py-2.5 rounded-lg bg-white hover:bg-neutral-200 disabled:opacity-50 text-neutral-950 font-semibold text-sm transition shrink-0"
               >
                 Send
