@@ -1,8 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_URL ||
-  'https://cfo-backend-api-autonomous-cfo-collabothon.apps.ocp.fr79k.sandbox786.opentlc.com';
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? "";
 const STORAGE_KEY_ACCOUNTS = 'financiailly_accounts_v1';
 const STORAGE_KEY_ACTIVE = 'financiailly_active_id_v1';
 

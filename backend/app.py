@@ -8,6 +8,8 @@ from typing import Any, Dict, List
 import requests
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from schemas import (
     FinancialContext,
@@ -432,3 +434,17 @@ async def frontend_cfo_chat(
         "reply": reply_text,
         "tax_telemetry": tax_report.model_dump(),
     }
+
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+
+if os.path.isdir(STATIC_DIR):
+    assets_dir = os.path.join(STATIC_DIR, "assets")
+    if os.path.isdir(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        file_path = os.path.join(STATIC_DIR, full_path)
+        if full_path and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
