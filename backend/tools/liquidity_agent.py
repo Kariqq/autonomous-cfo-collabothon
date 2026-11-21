@@ -11,7 +11,7 @@ from schemas import (
 
 
 def simulate_cashflow_ladder(req: LiquidityAnalysisRequest) -> dict:
-    """Niezależna symulacja przepływów dzień po dniu na X dni do przodu."""
+    """Day-by-day cash simulation for the next X days."""
     balance = req.current_balance
     min_balance = balance
     min_balance_date = req.as_of_date
@@ -53,8 +53,8 @@ def evaluate_credit_facility(
     req: LiquidityAnalysisRequest, sim_result: dict
 ) -> Tuple[Optional[ProposedCreditAction], str]:
     """
-    Dobiera propozycję finansowania i przygotowuje prompt dla LLM (Explainable AI).
-    Nie wykonuje żadnej operacji bankowej — zwraca obiekt wymagający zgody użytkownika.
+    Prepares a backup credit line proposal and a plain-English prompt for the LLM.
+    Never executes any bank transfer without explicit user approval.
     """
     shortfall = sim_result["shortfall"]
     if shortfall <= 0:
@@ -72,18 +72,19 @@ def evaluate_credit_facility(
     if discretionary:
         total_disc = abs(sum(t.amount for t in discretionary))
         disc_note = (
-            f" Dodatkowo zidentyfikowano wydatki uznaniowe ({discretionary[0].counterparty}) "
-            f"na kwotę {total_disc:.2f} {req.currency}, których przesunięcie zmniejszyłoby lukę."
+            f" We also spotted optional expenses ({discretionary[0].counterparty}) "
+            f"totaling {total_disc:.2f} {req.currency} that could be delayed to shrink the cash gap."
         )
 
     llm_prompt = (
-        f"Firma: {req.company_name}. Data analizy: {req.as_of_date}. "
-        f"Saldo początkowe: {req.current_balance:.2f} {req.currency}. "
-        f"Prognozowane minimum: {sim_result['min_balance']:.2f} {req.currency} "
-        f"w dniu {sim_result['min_balance_date']}. "
-        f"Główne obciążenia: {', '.join(sim_result['risk_drivers'])}.{disc_note} "
-        f"Uzasadnij w 3 zwięzłych zdaniach rekomendację uruchomienia linii kredytowej "
-        f"w rachunku bieżącym na kwotę {recommended_limit:.2f} {req.currency}."
+        f"Company: {req.company_name}. Today's date: {req.as_of_date}. "
+        f"Starting bank balance: {req.current_balance:.2f} {req.currency}. "
+        f"Lowest projected balance: {sim_result['min_balance']:.2f} {req.currency} "
+        f"on {sim_result['min_balance_date']}. "
+        f"Biggest upcoming bills: {', '.join(sim_result['risk_drivers'])}.{disc_note} "
+        f"In 3 short, jargon-free sentences, explain why opening a backup credit line "
+        f"of {recommended_limit:.2f} {req.currency} (estimated cost ~{est_monthly_interest:.2f} {req.currency}/month if used) "
+        f"keeps the business safe."
     )
 
     action = ProposedCreditAction(
@@ -104,7 +105,7 @@ def evaluate_credit_facility(
 def run_liquidity_agent(
     req: LiquidityAnalysisRequest, llm_callback
 ) -> LiquidityAgentResponse:
-    """Główna funkcja narzędzia Liquidity Agent."""
+    """Main Liquidity Agent tool function."""
     sim = simulate_cashflow_ladder(req)
     action, prompt = evaluate_credit_facility(req, sim)
 
@@ -113,18 +114,18 @@ def run_liquidity_agent(
 
     governance = AutonomyGovernance(
         independent_analysis=[
-            f"Symulacja salda dzień po dniu na {req.forecast_days} dni naprzód",
-            "Identyfikacja daty naruszenia bufora bezpieczeństwa oraz głównych obciążeń",
+            f"Day-by-day bank balance check for the next {req.forecast_days} days",
+            "Found the exact date your safety cushion dips and identified the biggest bills",
         ],
         agent_recommendations=[
-            f"Uruchomienie linii kredytowej na {action.amount:.2f} {req.currency}"
-            if action else "Brak potrzeby uruchamiania finansowania zewnętrznego"
+            f"Set up a backup credit line of {action.amount:.2f} {req.currency}"
+            if action else "No extra borrowing needed — your cash cushion looks healthy"
         ],
         requires_user_approval=[
-            "Złożenie wniosku i aktywacja linii kredytowej w banku",
-            "Ewentualne wstrzymanie przelewów inwestycyjnych/uznaniowych",
+            "Applying for and activating the backup credit line with your bank",
+            "Optionally delaying non-urgent investment transfers",
         ] if action else [],
-        execution_status="SIMULATED_SANDBOX (Brak realnego przelewu/zaciągnięcia długu)",
+        execution_status="SIMULATED_SANDBOX (Preview only — no real money moved or borrowed)",
     )
 
     return LiquidityAgentResponse(
