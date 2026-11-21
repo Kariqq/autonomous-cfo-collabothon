@@ -189,7 +189,7 @@ def endpoint_autonomous_cfo(ctx: FinancialContext):
 
     user_prompt = (
         f"Firma: {ctx.company_name}\n"
-        f"Stan gotówki: {ctx.cash_balance_pln} PLN | Miesięczny burn rate: {ctx.monthly_burn_rate_pln} PLN\n"
+        f"Stan gotówki: {ctx.cash_balance_eur} PLN | Miesięczny burn rate: {ctx.monthly_burn_rate_eur} PLN\n"
         f"Pytanie użytkownika: {ctx.user_query or 'Pełny przegląd CFO i plan optymalizacji.'}\n\n"
         f"Raporty agentów:\n" + "\n".join(combined_prompt_context) + "\n\n"
         f"Szczegóły techniczne:\n{json.dumps(all_recommendations, ensure_ascii=False, indent=2)}"
@@ -396,14 +396,14 @@ async def frontend_cfo_chat(
     cash_pln = 890000.0 if is_lukas else 342500.0
 
     demo_invoices = [] if has_file else [
-        Invoice(id="FV/01", contractor="Enterprise Client", amount=120000.0, vat_rate=0.23, due_in_days=10, type="receivable"),
-        Invoice(id="FV/02", contractor="AI & Cloud R&D Lab", amount=40000.0, vat_rate=0.23, due_in_days=5, type="payable", category="R&D"),
+        Invoice(id="FV/01", contractor="Enterprise Client", amount=120000.0, vat_rate=0.19, due_in_days=10, type="receivable"),
+        Invoice(id="FV/02", contractor="AI & Cloud R&D Lab", amount=40000.0, vat_rate=0.19, due_in_days=5, type="payable", category="R&D"),
     ]
 
     demo_ctx = FinancialContext(
         company_name=account,
-        cash_balance_pln=cash_pln,
-        monthly_burn_rate_pln=45000.0,
+        cash_balance_eur=cash_pln,
+        monthly_burn_rate_eur=45000.0,
         cit_rate=0.09,
         day_of_month=20,
         user_query=prompt,
