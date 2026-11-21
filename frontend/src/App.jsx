@@ -50,6 +50,124 @@ function renderFormattedMessage(text) {
   });
 }
 
+function LiquidityForecastChart({ chart }) {
+  const points = Array.isArray(chart?.points) ? chart.points : [];
+  if (points.length < 2) return null;
+
+  const width = 560;
+  const height = 210;
+  const padLeft = 64;
+  const padRight = 18;
+  const padTop = 20;
+  const padBottom = 34;
+
+  const buffer = Number(chart.safety_buffer ?? 0);
+  const values = points.map((p) => Number(p.balance || 0));
+  const minVal = Math.min(...values, buffer, 0);
+  const maxVal = Math.max(...values, buffer, 0);
+  const span = maxVal - minVal || 1;
+
+  const plotW = width - padLeft - padRight;
+  const plotH = height - padTop - padBottom;
+
+  const toX = (idx) => padLeft + (idx / (points.length - 1)) * plotW;
+  const toY = (val) => padTop + (1 - (val - minVal) / span) * plotH;
+
+  const coords = points.map((p, i) => ({
+    x: toX(i),
+    y: toY(Number(p.balance || 0)),
+    label: p.label,
+    balance: Number(p.balance || 0),
+  }));
+
+  const polylinePts = coords.map((c) => `${c.x},${c.y}`).join(' ');
+  const bufferY = toY(buffer);
+  const zeroY = toY(0);
+
+  return (
+    <div className="mt-3 rounded-xl border border-neutral-700/70 bg-neutral-900/80 p-3">
+      <div className="mb-2 flex items-center justify-between text-xs text-neutral-300">
+        <span className="font-semibold">{chart.title || 'Liquidity Forecast'}</span>
+        <span className="text-amber-300">
+          Safety Buffer: {buffer.toLocaleString()} {chart.currency || ''}
+        </span>
+      </div>
+
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-auto w-full overflow-visible">
+        {minVal < 0 && maxVal > 0 && (
+          <line
+            x1={padLeft}
+            x2={width - padRight}
+            y1={zeroY}
+            y2={zeroY}
+            stroke="#737373"
+            strokeWidth="1"
+            strokeDasharray="3 3"
+          />
+        )}
+
+        <line
+          x1={padLeft}
+          x2={width - padRight}
+          y1={bufferY}
+          y2={bufferY}
+          stroke="#f59e0b"
+          strokeWidth="1.5"
+          strokeDasharray="5 4"
+        />
+        <text x={padLeft + 4} y={bufferY - 5} fill="#fbbf24" fontSize="10">
+          Buffer ({buffer.toLocaleString()})
+        </text>
+
+        <text x={padLeft - 8} y={padTop + 4} textAnchor="end" fill="#a3a3a3" fontSize="10">
+          {maxVal.toLocaleString()}
+        </text>
+        <text x={padLeft - 8} y={height - padBottom} textAnchor="end" fill="#a3a3a3" fontSize="10">
+          {minVal.toLocaleString()}
+        </text>
+
+        <polyline
+          fill="none"
+          stroke="#38bdf8"
+          strokeWidth="2.5"
+          points={polylinePts}
+        />
+
+        {coords.map((c, idx) => {
+          const isBelowBuffer = c.balance < buffer;
+          const showXLabel =
+            coords.length <= 7 ||
+            idx === 0 ||
+            idx === coords.length - 1 ||
+            idx % Math.ceil(coords.length / 6) === 0;
+
+          return (
+            <g key={`${c.label}-${idx}`}>
+              <circle
+                cx={c.x}
+                cy={c.y}
+                r="3.5"
+                fill={isBelowBuffer ? '#ef4444' : '#38bdf8'}
+              />
+              {showXLabel && (
+                <text
+                  x={c.x}
+                  y={height - 10}
+                  textAnchor="middle"
+                  fill="#a3a3a3"
+                  fontSize="10"
+                >
+                  {c.label}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
 export default function App() {
   const [accounts, setAccounts] = useState(() => {
     try {
@@ -98,6 +216,7 @@ export default function App() {
       role: 'assistant',
       content:
         "Hi! I'm here to help you manage your finances. Ask me a question or upload a receipt/invoice to get started.",
+      chart: null,
     },
   ]);
 
@@ -258,7 +377,7 @@ export default function App() {
     const fileNote = attachedFile ? ` [Attached: ${attachedFile.name}]` : '';
     const currentFile = attachedFile;
 
-    setMessages((prev) => [...prev, { role: 'user', content: `${userText}${fileNote}` }]);
+    setMessages((prev) => [...prev, { role: 'user', content: `${userText}${fileNote}`, chart: null }]);
 
     if (currentFile) {
       addLog(`Uploaded ${currentFile.name} (${activeAccount.name})`);
@@ -284,13 +403,20 @@ export default function App() {
       if (!res.ok) throw new Error('Backend not connected');
       const data = await res.json();
 
-      setMessages((prev) => [...prev, { role: 'assistant', content: data.reply }]);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: data.reply,
+          chart: data.chart || null,
+        },
+      ]);
     } catch {
       const fallback = currentFile
         ? `Scanned "${currentFile.name}" for ${activeAccount.name}. Categorized deductible business expenses and verified VAT alignment—your net tax reduction remains ${activeAccount.taxSavings}.`
         : `[Tax Prep Agent • RHOAI]: For ${activeAccount.name} (Tax ID ${activeAccount.taxId}), adjusting your Q3 advance prepayment retains ${activeAccount.taxSavings} in cash while keeping your ${formatEuro(activeAccount.safetyBuffer)} liquidity buffer intact.`;
 
-      setMessages((prev) => [...prev, { role: 'assistant', content: fallback }]);
+      setMessages((prev) => [...prev, { role: 'assistant', content: fallback, chart: null }]);
     } finally {
       setLoading(false);
     }
@@ -536,6 +662,9 @@ export default function App() {
                     }`}
                   >
                     {msg.role === 'assistant' ? renderFormattedMessage(msg.content) : msg.content}
+                    {msg.role === 'assistant' && msg.chart?.type === 'liquidity_line' && (
+                      <LiquidityForecastChart chart={msg.chart} />
+                    )}
                   </div>
                 </div>
               ))}

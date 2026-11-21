@@ -17,12 +17,14 @@ class Invoice(BaseModel):
 
 class FinancialContext(BaseModel):
     company_name: str
+    currency: str = "EUR"
     cash_balance_eur: float
     monthly_burn_rate_eur: float
     cit_rate: float = 0.09         # NOWE: 0.09 (Mały podatnik CIT) lub 0.19 (Standard CIT)
     day_of_month: int = 15         # NOWE: Aktualny dzień miesiąca (do liczenia dni do 20. i 25.)
     invoices: List[Invoice] = Field(default_factory=list)
     user_query: Optional[str] = None
+
 
 class ScheduledTransaction(BaseModel):
     due_date: date
@@ -75,12 +77,14 @@ class LiquidityAgentResponse(BaseModel):
     governance: AutonomyGovernance
     proposed_action: Optional[ProposedCreditAction] = None
 
+
 class ToolOutput(BaseModel):
     agent_name: str
     status: str                    # "ACTION_REQUIRED" | "OPPORTUNITY_FOUND" | "OPTIMAL"
     metrics: Dict[str, Any]
     recommendations: List[Dict[str, Any]]
     prompt_context: str
+
 
 class InvoiceFX(BaseModel):
     id: str

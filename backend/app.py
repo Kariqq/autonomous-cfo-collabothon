@@ -541,6 +541,12 @@ async def frontend_cfo_chat(
                 "chart": None,
             }
 
+    if clean_prompt in CONFIRM_WORDS or clean_prompt in REJECT_WORDS:
+        return {
+            "reply": "There is no active proposal waiting for confirmation right now. Ask a question about your cash flow, taxes, or foreign currency payments to get started.",
+            "chart": None,
+        }
+
     if clean_prompt not in CONFIRM_WORDS and clean_prompt not in REJECT_WORDS:
         PENDING_FX_CONTRACTS.pop(account_key, None)
         PENDING_LIQUIDITY_ACTIONS.pop(account_key, None)
