@@ -291,10 +291,16 @@ function detectDirectAccountReply(prompt, account, liveMetrics, bankConnected, i
   if (/\bemail\b/.test(q)) {
     return `Your active account email is ${account.email}.`;
   }
-  if (/\bsafety\s*buffer\b|\bbuffer\b/.test(q)) {
+  if (
+    /\bsafety\s*buffer\b|\bbuffer\b/.test(q) &&
+    !/\b(forecast|chart|liquidity|cashflow|cash\s*flow|invoice|payable|receivable|burn)\b/.test(q)
+  ) {
     return `Your configured minimum cash safety buffer for ${account.name} is ${formatEuro(account.safetyBuffer)}.`;
   }
-  if (/\bliquidity\b|\bbalance\b|\bhow much money\b|\bcash\b/.test(q) && !/invoice|fx|forecast/.test(q)) {
+  if (
+    /\bliquidity\b|\bbalance\b|\bhow much money\b|\bcash\b/.test(q) &&
+    !/\b(invoice|fx|forecast|chart|payable|receivable|burn|days|buffer)\b/.test(q)
+  ) {
     if (!bankConnected || liveMetrics.liquidity === null) {
       return `No live bank feed is connected yet. Your baseline account balance is ${formatEuro(account.liquidity)}—click "Connect to bank" in the sidebar to compute live liquidity from open invoices.`;
     }
@@ -615,7 +621,7 @@ function TaxBreakdownChart({ chart, isDark }) {
         {items.map((item, idx) => {
           const val = Math.abs(Number(item.amount || 0));
           const isSaving = item.kind === 'saving';
-          const pct = Math.max(8, Math.round((val / maxVal) * 100));
+          const pct = val === 0 ? 4 : Math.max(8, Math.round((val / maxVal) * 100));
 
           return (
             <div key={`${item.label}-${idx}`} className="space-y-1">
@@ -632,7 +638,7 @@ function TaxBreakdownChart({ chart, isDark }) {
                       : 'text-amber-800 font-semibold'
                   }
                 >
-                  {isSaving ? '+' : '-'}€{val.toLocaleString()}
+                  {val === 0 ? '€0' : `${isSaving ? '+' : '-'}€${val.toLocaleString()}`}
                 </span>
               </div>
               <div
@@ -1211,19 +1217,23 @@ export default function App() {
       }
     }
 
+    const hasInlineNumbers = /\d[\d.,]*\s*(EUR|PLN|USD|CHF|GBP|%)/i.test(userText);
+
     const asksAboutInvoicesOrForecast =
-      /\b(invoice|inv-|fx|currency|chf|usd|forecast|chart|cashflow|cash flow|tax|vat|r&d|deduction|receivable|payable|analyze)\b/i.test(
+      /\b(invoice|inv-|fx|currency|chf|usd|forecast|chart|cashflow|cash flow|tax|vat|r&d|deduction|receivable|payable|analyze|liquidity|burn)\b/i.test(
         userText
       ) || Boolean(currentFile);
 
     const contextualPrompt =
-      bankConnected && spawnedInvoices.length > 0 && asksAboutInvoicesOrForecast
+      bankConnected && spawnedInvoices.length > 0 && asksAboutInvoicesOrForecast && !hasInlineNumbers
         ? `User Question: ${userText}\n\n[Workspace Context — Account: ${activeAccount.name}, IBAN: ${activeAccount.iban}, Tax ID: ${activeAccount.taxId}, Safety Buffer: ${formatEuro(activeAccount.safetyBuffer)}, Open Invoices: ${spawnedInvoices
             .map(
               (inv) =>
                 `${inv.id} (${inv.contractor}: ${inv.type === 'receivable' ? '+' : '-'}${inv.amount} ${inv.currency}, due in ${inv.dueInDays}d)`
             )
             .join('; ')}]`
+        : hasInlineNumbers
+        ? userText
         : `User Question: ${userText}\n\n[Workspace Profile — Account: ${activeAccount.name}, Email: ${activeAccount.email}, IBAN: ${activeAccount.iban}, Tax ID: ${activeAccount.taxId}, Safety Buffer: ${formatEuro(activeAccount.safetyBuffer)}. Answer ONLY the user's specific question directly and concisely without listing invoices unless requested.]`;
 
     try {

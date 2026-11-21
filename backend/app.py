@@ -143,7 +143,7 @@ def parse_prompt_to_financials(prompt: str, file_snippet: str = "") -> Dict[str,
     }
 
     base_match = re.search(
-        r"(?:rozlicza\s+si[ęe]\s+w|base\s+currency\s+is|operate\s+in)\s+(PLN|EUR|USD|CHF|GBP)",
+        r"(?:rozlicza\s+si[ęe]\s+w|base\s+currency(?:\s+is)?|operate\s+in|for)\s+(PLN|EUR|USD|CHF|GBP)\s+(?:base|currency)",
         text,
         re.IGNORECASE,
     )
@@ -242,7 +242,7 @@ def parse_prompt_to_financials(prompt: str, file_snippet: str = "") -> Dict[str,
         result["has_custom_numbers"] = True
 
     if not result["base_currency"] and result["invoices"]:
-        result["base_currency"] = result["invoices"][0]["currency"]
+        result["base_currency"] = "EUR"
 
     return result
 
@@ -593,10 +593,18 @@ async def frontend_cfo_chat(
         }
 
     agent_low = agent.strip().lower()
+    is_tax_query = (
+        agent_low in {"tax", "taxes"}
+        or any(w in clean_prompt for w in [
+            "tax", "vat", "cit", "pit", "r&d", "b+r", "deduction", "podat", "ulga",
+        ])
+    )
+
     is_fx_query = (
         agent_low in {"fx", "fx_hedging", "hedging"}
         or (
-            agent_low not in {"liquidity", "cashflow", "cash"}
+            not is_tax_query
+            and agent_low not in {"liquidity", "cashflow", "cash"}
             and any(w in clean_prompt for w in [
                 "walut", "fx", "forward", "kurs", "chf", "usd", "gbp",
                 "hedg", "currency", "exchange rate",
@@ -606,10 +614,14 @@ async def frontend_cfo_chat(
 
     is_liquidity_query = (
         agent_low in {"liquidity", "cashflow", "cash"}
-        or any(w in clean_prompt for w in [
-            "płynnoś", "plynnos", "gotówk", "cash", "bufor", "kredyt",
-            "brak gotówki", "runway", "liquidity", "overdraft", "shortage", "buffer",
-        ])
+        or (
+            not is_tax_query
+            and not is_fx_query
+            and any(w in clean_prompt for w in [
+                "płynnoś", "plynnos", "gotówk", "cash", "bufor", "kredyt",
+                "brak gotówki", "runway", "liquidity", "overdraft", "shortage", "buffer",
+            ])
+        )
     )
 
     # 2. Trigger FX Hedging Agent
@@ -909,43 +921,23 @@ async def frontend_cfo_chat(
     tax_report = run_tax_agent(demo_ctx)
 
     m = tax_report.metrics or {}
+    cit_val = float(m.get("cit_advance_to_pay_eur") or m.get("cit_payable_eur") or m.get("cit_eur") or 0.0)
+    vat_val = float(m.get("vat_to_pay_eur") or m.get("net_vat_eur") or m.get("vat_eur") or 0.0)
+    rd_val = float(m.get("rd_tax_credit_eur") or m.get("rd_deduction_eur") or m.get("b_r_relief_eur") or 0.0)
+    sav_val = float(m.get("estimated_tax_savings_eur") or m.get("total_tax_savings_eur") or m.get("tax_savings_eur") or 0.0)
+
     tax_bars = [
-        {
-            "label": "CIT Advance",
-            "amount": round(float(m.get("cit_advance_to_pay_eur", 0.0)), 2),
-            "kind": "liability",
-        },
-        {
-            "label": "VAT Payable",
-            "amount": round(float(m.get("vat_to_pay_eur", 0.0)), 2),
-            "kind": "liability",
-        },
-        {
-            "label": "R&D Relief",
-            "amount": round(
-                float(m.get("rd_tax_credit_eur", m.get("rd_deduction_eur", 0.0))), 2
-            ),
-            "kind": "saving",
-        },
-        {
-            "label": "Est. Savings",
-            "amount": round(
-                float(m.get("estimated_tax_savings_eur", m.get("total_tax_savings_eur", 0.0))), 2
-            ),
-            "kind": "saving",
-        },
+        {"label": "CIT Advance", "amount": round(cit_val, 2), "kind": "liability"},
+        {"label": "VAT Payable", "amount": round(vat_val, 2), "kind": "liability"},
+        {"label": "R&D Relief", "amount": round(rd_val, 2), "kind": "saving"},
+        {"label": "Est. Savings", "amount": round(sav_val, 2), "kind": "saving"},
     ]
-    tax_bars = [b for b in tax_bars if b["amount"] > 0]
-    tax_chart = (
-        {
-            "type": "tax_breakdown",
-            "title": "Tax Obligations vs. Identified Savings (EUR)",
-            "currency": "EUR",
-            "items": tax_bars,
-        }
-        if tax_bars
-        else None
-    )
+    tax_chart = {
+        "type": "tax_breakdown",
+        "title": "Tax Obligations vs. Identified Savings (EUR)",
+        "currency": "EUR",
+        "items": tax_bars,
+    }
 
     system_prompt = (
         "You are the friendly Tax Helper inside FinancAI.lly running on Red Hat OpenShift AI.\n"
