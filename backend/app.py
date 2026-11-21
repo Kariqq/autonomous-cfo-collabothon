@@ -477,6 +477,7 @@ def bank_callback(code: str, state: str):
     complete_bank_auth(code=code, account_key=account_key)
     return RedirectResponse(url="/?bank_connected=true")
 
+
 @app.post("/api/cfo/chat")
 async def frontend_cfo_chat(
     prompt: str = Form(...),
@@ -633,6 +634,27 @@ async def frontend_cfo_chat(
         if not fx_invoices and not has_custom and not has_file:
             fx_invoices = bank_fx_invs
 
+        fx_chart_items = [
+            {
+                "label": f"{inv.id} ({inv.currency})",
+                "currency": inv.currency,
+                "amount_fc": round(float(inv.amount) if inv.type == "receivable" else -float(inv.amount), 2),
+                "type": inv.type,
+                "due_in_days": inv.due_in_days,
+            }
+            for inv in fx_invoices
+        ]
+        fx_chart = (
+            {
+                "type": "fx_exposure",
+                "title": f"Foreign Currency Exposure ({base_curr} Base)",
+                "base_currency": base_curr,
+                "items": fx_chart_items,
+            }
+            if fx_chart_items
+            else None
+        )
+
         fx_ctx = FinancialContextFX(
             company_name=account,
             base_currency=base_curr,
@@ -676,7 +698,7 @@ async def frontend_cfo_chat(
                 "reply": llm_reply,
                 "fx_telemetry": fx_report.model_dump(),
                 "pending_approval": True,
-                "chart": None,
+                "chart": fx_chart,
             }
         return {
             "reply": (
@@ -685,7 +707,7 @@ async def frontend_cfo_chat(
                 f"Would you like me to lock in a Commerzbank FX Forward rate for these foreign invoices? Please reply: yes or no."
             ),
             "fx_telemetry": fx_report.model_dump(),
-            "chart": None,
+            "chart": fx_chart,
         }
 
     # 3. Trigger Liquidity Agent (with discretionary spending priority + TaxAgent synergy + chart)
@@ -886,6 +908,45 @@ async def frontend_cfo_chat(
     )
     tax_report = run_tax_agent(demo_ctx)
 
+    m = tax_report.metrics or {}
+    tax_bars = [
+        {
+            "label": "CIT Advance",
+            "amount": round(float(m.get("cit_advance_to_pay_eur", 0.0)), 2),
+            "kind": "liability",
+        },
+        {
+            "label": "VAT Payable",
+            "amount": round(float(m.get("vat_to_pay_eur", 0.0)), 2),
+            "kind": "liability",
+        },
+        {
+            "label": "R&D Relief",
+            "amount": round(
+                float(m.get("rd_tax_credit_eur", m.get("rd_deduction_eur", 0.0))), 2
+            ),
+            "kind": "saving",
+        },
+        {
+            "label": "Est. Savings",
+            "amount": round(
+                float(m.get("estimated_tax_savings_eur", m.get("total_tax_savings_eur", 0.0))), 2
+            ),
+            "kind": "saving",
+        },
+    ]
+    tax_bars = [b for b in tax_bars if b["amount"] > 0]
+    tax_chart = (
+        {
+            "type": "tax_breakdown",
+            "title": "Tax Obligations vs. Identified Savings (EUR)",
+            "currency": "EUR",
+            "items": tax_bars,
+        }
+        if tax_bars
+        else None
+    )
+
     system_prompt = (
         "You are the friendly Tax Helper inside FinancAI.lly running on Red Hat OpenShift AI.\n"
         f"{PLAIN_ENGLISH_CONSTRAINTS}"
@@ -905,7 +966,7 @@ async def frontend_cfo_chat(
     return {
         "reply": reply_text,
         "tax_telemetry": tax_report.model_dump(),
-        "chart": None,
+        "chart": tax_chart,
     }
 
 

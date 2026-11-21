@@ -522,6 +522,153 @@ function LiquidityForecastChart({ chart, isDark }) {
   );
 }
 
+function FxExposureChart({ chart, isDark }) {
+  const items = Array.isArray(chart?.items) ? chart.items : [];
+  if (items.length === 0) return null;
+
+  const maxAbs = Math.max(...items.map((i) => Math.abs(Number(i.amount_fc || 0))), 1);
+
+  return (
+    <div
+      className={`mt-3 rounded-xl border p-3 text-xs ${
+        isDark
+          ? 'border-neutral-700/70 bg-neutral-900/80 text-neutral-300'
+          : 'border-[#d6cbb7] bg-[#fbf7f0] text-stone-800'
+      }`}
+    >
+      <div className="mb-2.5 flex items-center justify-between gap-2">
+        <span className="font-semibold">{chart.title || 'FX Exposure'}</span>
+        <span className={isDark ? 'text-sky-300 font-mono' : 'text-sky-800 font-mono'}>
+          Base: {chart.base_currency || 'EUR'}
+        </span>
+      </div>
+
+      <div className="space-y-2">
+        {items.map((item, idx) => {
+          const val = Number(item.amount_fc || 0);
+          const isIncoming = val >= 0;
+          const pct = Math.max(8, Math.round((Math.abs(val) / maxAbs) * 100));
+
+          return (
+            <div key={`${item.label}-${idx}`} className="space-y-1">
+              <div className="flex items-center justify-between font-mono text-[11px]">
+                <span>
+                  {item.label} • Due {item.due_in_days}d
+                </span>
+                <span
+                  className={
+                    isIncoming
+                      ? isDark
+                        ? 'text-emerald-400 font-semibold'
+                        : 'text-emerald-700 font-semibold'
+                      : isDark
+                      ? 'text-rose-400 font-semibold'
+                      : 'text-rose-700 font-semibold'
+                  }
+                >
+                  {isIncoming ? '+' : '-'}
+                  {Math.abs(val).toLocaleString()} {item.currency}
+                </span>
+              </div>
+              <div
+                className={`h-2 w-full rounded-full overflow-hidden ${
+                  isDark ? 'bg-neutral-800' : 'bg-[#e6dcc9]'
+                }`}
+              >
+                <div
+                  style={{ width: `${pct}%` }}
+                  className={`h-full rounded-full ${
+                    isIncoming ? 'bg-emerald-500' : 'bg-rose-500'
+                  }`}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TaxBreakdownChart({ chart, isDark }) {
+  const items = Array.isArray(chart?.items) ? chart.items : [];
+  if (items.length === 0) return null;
+
+  const maxVal = Math.max(...items.map((i) => Math.abs(Number(i.amount || 0))), 1);
+
+  return (
+    <div
+      className={`mt-3 rounded-xl border p-3 text-xs ${
+        isDark
+          ? 'border-neutral-700/70 bg-neutral-900/80 text-neutral-300'
+          : 'border-[#d6cbb7] bg-[#fbf7f0] text-stone-800'
+      }`}
+    >
+      <div className="mb-2.5 flex items-center justify-between gap-2">
+        <span className="font-semibold">{chart.title || 'Tax Breakdown'}</span>
+        <span className={isDark ? 'text-neutral-400 font-mono' : 'text-stone-600 font-mono'}>
+          {chart.currency || 'EUR'}
+        </span>
+      </div>
+
+      <div className="space-y-2">
+        {items.map((item, idx) => {
+          const val = Math.abs(Number(item.amount || 0));
+          const isSaving = item.kind === 'saving';
+          const pct = Math.max(8, Math.round((val / maxVal) * 100));
+
+          return (
+            <div key={`${item.label}-${idx}`} className="space-y-1">
+              <div className="flex items-center justify-between font-mono text-[11px]">
+                <span>{item.label}</span>
+                <span
+                  className={
+                    isSaving
+                      ? isDark
+                        ? 'text-emerald-400 font-semibold'
+                        : 'text-emerald-700 font-semibold'
+                      : isDark
+                      ? 'text-amber-300 font-semibold'
+                      : 'text-amber-800 font-semibold'
+                  }
+                >
+                  {isSaving ? '+' : '-'}€{val.toLocaleString()}
+                </span>
+              </div>
+              <div
+                className={`h-2 w-full rounded-full overflow-hidden ${
+                  isDark ? 'bg-neutral-800' : 'bg-[#e6dcc9]'
+                }`}
+              >
+                <div
+                  style={{ width: `${pct}%` }}
+                  className={`h-full rounded-full ${
+                    isSaving ? 'bg-emerald-500' : 'bg-amber-500'
+                  }`}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function FinancialChartRenderer({ chart, isDark }) {
+  if (!chart) return null;
+  if (chart.type === 'liquidity_line') {
+    return <LiquidityForecastChart chart={chart} isDark={isDark} />;
+  }
+  if (chart.type === 'fx_exposure') {
+    return <FxExposureChart chart={chart} isDark={isDark} />;
+  }
+  if (chart.type === 'tax_breakdown') {
+    return <TaxBreakdownChart chart={chart} isDark={isDark} />;
+  }
+  return null;
+}
+
 export default function App() {
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem(STORAGE_KEY_THEME) || 'dark';
@@ -699,7 +846,7 @@ export default function App() {
 
   const liveMetrics = computeBankMetrics(activeAccount, spawnedInvoices, bankConnected);
 
-  const latestChart =
+  const bankDefaultChart =
     activeAccount && bankConnected && spawnedInvoices.length > 0
       ? {
           type: 'liquidity_line',
@@ -708,10 +855,11 @@ export default function App() {
           safety_buffer: activeAccount.safetyBuffer,
           points: liveMetrics.chartPoints,
         }
-      : [...messages]
-          .reverse()
-          .find((m) => m.chart && Array.isArray(m.chart.points) && m.chart.points.length >= 2)
-          ?.chart || null;
+      : null;
+
+  const lastMessageChart = [...messages].reverse().find((m) => Boolean(m.chart))?.chart || null;
+
+  const latestChart = lastMessageChart || bankDefaultChart;
 
   const toggleTheme = () => {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
@@ -1111,7 +1259,7 @@ export default function App() {
         {
           role: 'assistant',
           content: data.reply,
-          chart: data.chart || (shouldAttachChart ? latestChart : null),
+          chart: data.chart || (shouldAttachChart ? bankDefaultChart : null),
           documentPreview: null,
         },
       ]);
@@ -1133,7 +1281,7 @@ export default function App() {
             bankConnected &&
             spawnedInvoices.length > 0 &&
             /\b(chart|forecast|cashflow|cash flow|liquidity|timeline)\b/i.test(userText)
-              ? latestChart
+              ? bankDefaultChart
               : null,
           documentPreview: null,
         },
@@ -1856,6 +2004,7 @@ export default function App() {
               })}
             </div>
 
+            {/* Bottom-left Show Chart button */}
             <div
               className={`pt-2.5 mt-2.5 border-t shrink-0 ${
                 isDark ? 'border-neutral-800' : 'border-[#dfd6c5]'
@@ -1867,10 +2016,10 @@ export default function App() {
                 onClick={() => latestChart && setChartModalOpen(true)}
                 title={
                   latestChart
-                    ? 'Open cashflow & liquidity chart'
-                    : 'Connect to bank first to generate invoice cashflow chart'
+                    ? 'Open latest financial chart preview'
+                    : 'Run a liquidity, FX, or tax analysis to generate a chart'
                 }
-                className={`w-full py-2 px-3 rounded-lg border text-xs font-mono font-semibold flex items-center justify-center gap-2 transition ${
+                className={`w-full py-2.5 px-3 rounded-lg border text-xs font-mono font-semibold flex items-center justify-center gap-2 transition ${
                   !latestChart
                     ? isDark
                       ? 'bg-neutral-900 text-neutral-600 border-neutral-800 cursor-not-allowed'
@@ -1878,25 +2027,6 @@ export default function App() {
                     : isDark
                     ? 'bg-neutral-800 hover:bg-neutral-700 text-white border-neutral-700 cursor-pointer'
                     : 'bg-[#efe8db] hover:bg-[#e5dccb] text-stone-950 border-[#cfc3ae] cursor-pointer'
-                }`}
-              >
-                <span>📈 Show Chart</span>
-              </button>
-            </div>
-
-            {/* Bottom-left Show Chart button */}
-            <div
-              className={`pt-3 mt-3 border-t shrink-0 ${
-                isDark ? 'border-neutral-800' : 'border-[#dfd6c5]'
-              }`}
-            >
-              <button
-                type="button"
-                onClick={() => setChartModalOpen(true)}
-                className={`w-full py-2.5 px-3 rounded-lg border text-xs font-mono font-semibold flex items-center justify-center gap-2 transition cursor-pointer ${
-                  isDark
-                    ? 'bg-neutral-800 hover:bg-neutral-700 text-white border-neutral-700'
-                    : 'bg-[#efe8db] hover:bg-[#e5dccb] text-stone-950 border-[#cfc3ae]'
                 }`}
               >
                 <span>📈 Show Chart</span>
@@ -1960,8 +2090,8 @@ export default function App() {
                     {msg.role === 'assistant'
                       ? renderFormattedMessage(msg.content, isDark)
                       : msg.content}
-                    {msg.role === 'assistant' && msg.chart?.type === 'liquidity_line' && (
-                      <LiquidityForecastChart chart={msg.chart} isDark={isDark} />
+                    {msg.role === 'assistant' && msg.chart && (
+                      <FinancialChartRenderer chart={msg.chart} isDark={isDark} />
                     )}
                   </div>
                 </div>
@@ -2067,7 +2197,7 @@ export default function App() {
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Liquidity Forecast Chart"
+          aria-label="Financial Chart Preview"
           onClick={() => setChartModalOpen(false)}
           className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
         >
@@ -2089,7 +2219,7 @@ export default function App() {
                   isDark ? 'text-white' : 'text-stone-950'
                 }`}
               >
-                {latestChart.title || 'Liquidity Forecast Chart'}
+                {latestChart.title || 'Financial Chart'}
               </span>
               <button
                 type="button"
@@ -2105,7 +2235,7 @@ export default function App() {
             </div>
 
             <div className="p-5">
-              <LiquidityForecastChart chart={latestChart} isDark={isDark} />
+              <FinancialChartRenderer chart={latestChart} isDark={isDark} />
             </div>
           </div>
         </div>
