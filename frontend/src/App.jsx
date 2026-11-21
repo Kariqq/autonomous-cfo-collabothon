@@ -136,10 +136,22 @@ function LiquidityForecastChart({ chart, isDark }) {
           Buffer ({buffer.toLocaleString()})
         </text>
 
-        <text x={padLeft - 8} y={padTop + 4} textAnchor="end" fill={isDark ? '#a3a3a3' : '#57534e'} fontSize="10">
+        <text
+          x={padLeft - 8}
+          y={padTop + 4}
+          textAnchor="end"
+          fill={isDark ? '#a3a3a3' : '#57534e'}
+          fontSize="10"
+        >
           {maxVal.toLocaleString()}
         </text>
-        <text x={padLeft - 8} y={height - padBottom} textAnchor="end" fill={isDark ? '#a3a3a3' : '#57534e'} fontSize="10">
+        <text
+          x={padLeft - 8}
+          y={height - padBottom}
+          textAnchor="end"
+          fill={isDark ? '#a3a3a3' : '#57534e'}
+          fontSize="10"
+        >
           {minVal.toLocaleString()}
         </text>
 
@@ -235,6 +247,7 @@ export default function App() {
 
   const [accountModalOpen, setAccountModalOpen] = useState(false);
   const [accountModalTab, setAccountModalTab] = useState('switch');
+  const [chartModalOpen, setChartModalOpen] = useState(false);
   const [authError, setAuthError] = useState('');
 
   const [authEmail, setAuthEmail] = useState('');
@@ -288,6 +301,29 @@ export default function App() {
   }, [messages, loading]);
 
   const activeAccount = accounts.find((a) => a.id === activeAccountId) || null;
+
+  // Use the latest chart returned from the backend, or build a baseline forecast from activeAccount
+  const latestChart =
+    [...messages]
+      .reverse()
+      .find((m) => m.chart && Array.isArray(m.chart.points) && m.chart.points.length >= 2)
+      ?.chart ||
+    (activeAccount
+      ? {
+          type: 'liquidity_line',
+          title: `${activeAccount.name} — Liquidity Forecast`,
+          currency: 'EUR',
+          safety_buffer: activeAccount.safetyBuffer,
+          points: [
+            { label: 'Now', balance: activeAccount.liquidity },
+            { label: 'W1', balance: Math.round(activeAccount.liquidity * 0.94) },
+            { label: 'W2', balance: Math.round(activeAccount.liquidity * 0.88) },
+            { label: 'W3', balance: Math.round(activeAccount.liquidity * 0.91) },
+            { label: 'W4', balance: Math.round(activeAccount.liquidity * 0.85) },
+            { label: 'W5', balance: Math.round(activeAccount.liquidity * 0.97) },
+          ],
+        }
+      : null);
 
   const toggleTheme = () => {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
@@ -404,6 +440,7 @@ export default function App() {
     setIsSignedIn(false);
     setActiveAccountId('');
     setAccountModalOpen(false);
+    setChartModalOpen(false);
     setAuthError('');
   };
 
@@ -443,7 +480,7 @@ export default function App() {
 
     try {
       const formData = new FormData();
-      formData.append('agent', 'tax');
+      formData.append('agent', 'auto');
       formData.append('account', activeAccount.name);
       formData.append('prompt', userText);
       if (currentFile) formData.append('file', currentFile);
@@ -920,6 +957,25 @@ export default function App() {
                 </div>
               ))}
             </div>
+
+            {/* Bottom-left Show Chart button */}
+            <div
+              className={`pt-3 mt-3 border-t shrink-0 ${
+                isDark ? 'border-neutral-800' : 'border-[#dfd6c5]'
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => setChartModalOpen(true)}
+                className={`w-full py-2.5 px-3 rounded-lg border text-xs font-mono font-semibold flex items-center justify-center gap-2 transition cursor-pointer ${
+                  isDark
+                    ? 'bg-neutral-800 hover:bg-neutral-700 text-white border-neutral-700'
+                    : 'bg-[#efe8db] hover:bg-[#e5dccb] text-stone-950 border-[#cfc3ae]'
+                }`}
+              >
+                <span>📈 Show Chart</span>
+              </button>
+            </div>
           </div>
         </aside>
 
@@ -1081,6 +1137,55 @@ export default function App() {
           </div>
         </main>
       </div>
+
+      {/* Chart Modal */}
+      {chartModalOpen && latestChart && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Liquidity Forecast Chart"
+          onClick={() => setChartModalOpen(false)}
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full max-w-2xl rounded-xl border overflow-hidden shadow-2xl ${
+              isDark
+                ? 'bg-neutral-900 border-neutral-700'
+                : 'bg-[#fbf7f0] border-[#d6cbb7]'
+            }`}
+          >
+            <div
+              className={`px-5 py-3.5 border-b flex items-center justify-between ${
+                isDark ? 'border-neutral-800' : 'border-[#dfd6c5]'
+              }`}
+            >
+              <span
+                className={`font-mono text-sm font-semibold ${
+                  isDark ? 'text-white' : 'text-stone-950'
+                }`}
+              >
+                {latestChart.title || 'Liquidity Forecast Chart'}
+              </span>
+              <button
+                type="button"
+                onClick={() => setChartModalOpen(false)}
+                className={`text-sm font-mono cursor-pointer ${
+                  isDark
+                    ? 'text-neutral-400 hover:text-white'
+                    : 'text-stone-600 hover:text-stone-950'
+                }`}
+              >
+                [ESC / ✕]
+              </button>
+            </div>
+
+            <div className="p-5">
+              <LiquidityForecastChart chart={latestChart} isDark={isDark} />
+            </div>
+          </div>
+        </div>
+      )}
 
       {accountModalOpen && (
         <div
