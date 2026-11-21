@@ -1225,14 +1225,14 @@ export default function App() {
     const hasInlineNumbers = /\d[\d.,]*\s*(EUR|PLN|USD|CHF|GBP|%)/i.test(userText);
 
     const asksAboutInvoicesOrForecast =
-      /\b(invoice|inv-|fx|currency|chf|usd|forecast|chart|cashflow|cash flow|tax|vat|r&d|deduction|receivable|payable|analyze|liquidity|burn)\b/i.test(
+      /\b(invoice|inv-|fx|currency|chf|usd|forecast|chart|cashflow|cash flow|tax|vat|r&d|deduction|receivable|payable|analyze|liquidity|burn|pay|payroll|employees|salary|wages|afford|expenses)\b/i.test(
         userText
       ) || Boolean(currentFile);
 
     const contextualPrompt = isConfirmationReply
       ? userText.trim()
       : bankConnected && spawnedInvoices.length > 0 && asksAboutInvoicesOrForecast && !hasInlineNumbers
-      ? `User Question: ${userText}\n\n[Workspace Context — Account: ${activeAccount.name}, IBAN: ${activeAccount.iban}, Tax ID: ${activeAccount.taxId}, Safety Buffer: ${formatEuro(activeAccount.safetyBuffer)}, Open Invoices: ${spawnedInvoices
+      ? `User Question: ${userText}\n\n[Workspace Context — Account: ${activeAccount.name}, Balance: ${formatEuro(activeAccount.liquidity)}, IBAN: ${activeAccount.iban}, Tax ID: ${activeAccount.taxId}, Safety Buffer: ${formatEuro(activeAccount.safetyBuffer)}, Open Invoices: ${spawnedInvoices
           .map(
             (inv) =>
               `${inv.id} (${inv.contractor}: ${inv.type === 'receivable' ? '+' : '-'}${inv.amount} ${inv.currency}, due in ${inv.dueInDays}d)`

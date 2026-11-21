@@ -596,14 +596,31 @@ async def frontend_cfo_chat(
         snippet = raw_bytes[:2000].decode("utf-8", errors="ignore")
         file_context = f"\nAttached document ({file.filename}):\n{snippet}\n"
 
-    extracted = parse_prompt_to_financials(stripped_prompt, file_context)
+    has_workspace_bank_feed = "[workspace context" in prompt.lower()
+    extracted = parse_prompt_to_financials(prompt, file_context)
     has_custom = bool(extracted.get("has_custom_numbers")) or bool(extracted.get("invoices"))
+
+    # Obsługa powitań i prostych pytań konwersacyjnych bez wymuszania połączenia z bankiem
+    is_greeting = clean_prompt in {"hi", "hello", "hey", "cześć", "czesc", "hej", "good morning", "good afternoon"}
+    if is_greeting:
+        return {
+            "reply": f"Hi! I'm your Finance AI Assistant for {account}. Ask me about your cash flow, taxes, or foreign currency invoices—or enter your numbers directly in the chat.",
+            "chart": None,
+        }
 
     bank_cash_eur, bank_tax_invs, bank_fx_invs, bank_sched_txs = fetch_bank_financials(account_key)
 
-    if account_key not in BANK_SESSIONS and not has_custom and not has_file:
+    if (
+            account_key not in BANK_SESSIONS
+            and not has_workspace_bank_feed
+            and not has_custom
+            and not has_file
+    ):
         return {
-            "reply": "Your German bank account is not connected yet. Please connect your bank sandbox first or enter your amounts in the chat.",
+            "reply": (
+                "I don't have your live bank balance or payroll numbers yet. "
+                "Please click **Connect to bank** in the left sidebar or type your current cash balance and upcoming expenses in the chat (e.g., *'I have 50,000 EUR in my account and payroll is 20,000 EUR due in 5 days'*)."
+            ),
             "requires_bank_connection": True,
             "chart": None,
         }
