@@ -59,7 +59,6 @@ REJECT_WORDS = {
     "decline", "nie", "anuluj", "odrzucam",
 }
 
-# Strict guardrails tailored for Llama 3.2 3B + non-financial users
 PLAIN_ENGLISH_CONSTRAINTS = (
     "MANDATORY RULES (FOLLOW STRICTLY):\n"
     "1. ENGLISH ONLY: Write your entire response in simple, natural English. Never use Polish words, even if input categories are in Polish.\n"
@@ -327,14 +326,12 @@ def endpoint_autonomous_cfo(ctx: FinancialContext):
     combined_prompt_context = []
     tax_result: ToolOutput | None = None
 
-    # 1. Run TaxAgent first if requested (or needed by LiquidityAgent for tax deadlines)
     if "tax" in agents_to_run or "liquidity" in agents_to_run:
         tax_result = run_tax_agent(ctx)
         if "tax" in agents_to_run:
             tool_outputs.append(tax_result)
             combined_prompt_context.append(tax_result.prompt_context)
 
-    # 2. Run LiquidityAgent with TaxAgent synergy + plain-English LLM explanation
     if "liquidity" in agents_to_run:
         def liquidity_llm_callback(prompt: str) -> str:
             return call_llm(
@@ -355,7 +352,7 @@ def endpoint_autonomous_cfo(ctx: FinancialContext):
         tool_outputs.append(liq_result)
         combined_prompt_context.append(liq_result.prompt_context)
 
-    currency = ctx.currency.upper()
+    currency = (getattr(ctx, "currency", None) or "EUR").upper()
 
     system_prompt = (
         "You are a friendly business money helper translating financial numbers into plain English for a non-expert owner.\n"
@@ -498,6 +495,7 @@ async def frontend_cfo_chat(
                     f"You are now protected against sudden exchange rate changes for this invoice."
                 ),
                 "deal_executed": deal_info,
+                "chart": None,
             }
 
         if clean_prompt in REJECT_WORDS:
@@ -505,6 +503,7 @@ async def frontend_cfo_chat(
             return {
                 "reply": "The rate lock offer was canceled. Your upcoming foreign invoice stays at the open market exchange rate.",
                 "deal_executed": None,
+                "chart": None,
             }
 
     # 1B. Handle user confirmation ("yes" / "no") for a pending Liquidity action (Deferral or Credit Line)
@@ -530,6 +529,7 @@ async def frontend_cfo_chat(
                     f"Your temporary cash shortage is now covered."
                 ),
                 "action": action.model_dump(),
+                "chart": None,
             }
 
         if clean_prompt in REJECT_WORDS:
@@ -538,14 +538,13 @@ async def frontend_cfo_chat(
             return {
                 "reply": "The cash protection proposal was declined. Your payment schedule remains unchanged.",
                 "action": action.model_dump(),
+                "chart": None,
             }
 
-    # Clear stale pending proposals if the user moved on to a new question
     if clean_prompt not in CONFIRM_WORDS and clean_prompt not in REJECT_WORDS:
         PENDING_FX_CONTRACTS.pop(account_key, None)
         PENDING_LIQUIDITY_ACTIONS.pop(account_key, None)
 
-    # Read optional uploaded file
     file_context = ""
     has_file = bool(file and file.filename)
 
@@ -554,7 +553,6 @@ async def frontend_cfo_chat(
         snippet = raw_bytes[:2000].decode("utf-8", errors="ignore")
         file_context = f"\nAttached document ({file.filename}):\n{snippet}\n"
 
-    # Extract custom amounts/invoices from user prompt & uploaded file
     extracted = parse_prompt_to_financials(prompt, file_context)
     has_custom = bool(extracted.get("has_custom_numbers")) or bool(extracted.get("invoices"))
 
@@ -662,6 +660,7 @@ async def frontend_cfo_chat(
                 "reply": llm_reply,
                 "fx_telemetry": fx_report.model_dump(),
                 "pending_approval": True,
+                "chart": None,
             }
         return {
             "reply": (
@@ -670,9 +669,10 @@ async def frontend_cfo_chat(
                 f"Would you like me to lock in a Commerzbank FX Forward rate for these foreign invoices? Please reply: yes or no."
             ),
             "fx_telemetry": fx_report.model_dump(),
+            "chart": None,
         }
 
-    # 3. Trigger Liquidity Agent (with discretionary spending priority + TaxAgent synergy)
+    # 3. Trigger Liquidity Agent (with discretionary spending priority + TaxAgent synergy + chart)
     if is_liquidity_query:
         today = date.today()
         curr = (extracted.get("base_currency") or "EUR").upper()
@@ -739,7 +739,6 @@ async def frontend_cfo_chat(
                 ),
             ]
 
-        # Inject upcoming Income Tax (CIT) and Sales Tax (VAT) bills from TaxAgent
         if tax_invoices:
             burn_for_tax = float(extracted.get("monthly_burn_rate") if extracted.get("monthly_burn_rate") is not None else 0.0)
             tax_preview = run_tax_agent(
@@ -798,6 +797,40 @@ async def frontend_cfo_chat(
         if liq_resp.proposed_action:
             PENDING_LIQUIDITY_ACTIONS[account_key] = liq_resp.proposed_action
 
+        liq_dump = liq_resp.model_dump()
+        raw_points = (
+            liq_dump.get("daily_forecast")
+            or liq_dump.get("forecast")
+            or liq_dump.get("timeline")
+            or []
+        )
+
+        chart_points = []
+        if isinstance(raw_points, list) and raw_points:
+            for i, p in enumerate(raw_points):
+                if isinstance(p, dict):
+                    label = str(p.get("date") or p.get("day") or f"Day {i}")
+                    bal_val = p.get("projected_balance", p.get("balance", p.get("closing_balance", balance)))
+                    try:
+                        chart_points.append({"label": label, "balance": round(float(bal_val), 2)})
+                    except (TypeError, ValueError):
+                        pass
+
+        if not chart_points:
+            running = balance
+            chart_points.append({"label": "Today", "balance": round(running, 2)})
+            for tx in sorted(scheduled_txs, key=lambda t: t.due_date):
+                running += float(tx.amount)
+                chart_points.append({"label": tx.due_date.strftime("%m-%d"), "balance": round(running, 2)})
+
+        liquidity_chart = {
+            "type": "liquidity_line",
+            "title": f"Cash Balance Forecast ({curr})",
+            "currency": curr,
+            "safety_buffer": round(buffer, 2),
+            "points": chart_points,
+        }
+
         system_prompt = (
             "You are the Cash-Flow Guardian inside FinancAI.lly running on Red Hat OpenShift AI.\n"
             f"{PLAIN_ENGLISH_CONSTRAINTS}"
@@ -806,14 +839,15 @@ async def frontend_cfo_chat(
             "If proposed_action is present, end by asking: 'Would you like to approve this cash-protection plan in preview mode? Please reply: yes or no'."
         )
         user_prompt = (
-            f"Liquidity Tool Result: {json.dumps(liq_resp.model_dump(), default=str, ensure_ascii=False)}\n"
+            f"Liquidity Tool Result: {json.dumps(liq_dump, default=str, ensure_ascii=False)}\n"
             f"User question: {prompt}"
         )
         reply_text = call_llm(system_prompt, user_prompt, max_tokens=650)
         return {
             "reply": reply_text,
-            "liquidity_telemetry": liq_resp.model_dump(),
+            "liquidity_telemetry": liq_dump,
             "pending_approval": bool(liq_resp.proposed_action),
+            "chart": liquidity_chart,
         }
 
     # 4. Default: Tax Prep AI Agent
@@ -876,6 +910,7 @@ async def frontend_cfo_chat(
     return {
         "reply": reply_text,
         "tax_telemetry": tax_report.model_dump(),
+        "chart": None,
     }
 
 
