@@ -22,7 +22,11 @@ from schemas import (
     ToolOutput,
 )
 from tools.fx_hedging_agent import run_fx_hedging_agent
-from tools.liquidity_agent import run_liquidity_agent
+from tools.liquidity_agent import (
+    DISCRETIONARY_CATEGORIES,
+    run_liquidity_agent,
+    run_liquidity_tool,
+)
 from tools.tax_agent import run_tax_agent
 
 app = FastAPI(title="Autonomous CFO Agent", version="2.0")
@@ -41,12 +45,19 @@ MODEL_URL = os.getenv("MODEL_URL", "").strip() or _default_url
 MODEL_NAME = os.getenv("MODEL_NAME", "").strip() or "llama-32-3b-instruct"
 MODEL_TOKEN = os.getenv("MODEL_TOKEN", "").strip()
 
-# Memory for decisions Human-in-the-Loop (Liquidity & FX)
+# Memory for Human-in-the-Loop decisions (Liquidity & FX)
 PENDING_LIQUIDITY_ACTIONS: Dict[str, ProposedCreditAction] = {}
 PENDING_FX_CONTRACTS: Dict[str, Dict[str, Any]] = {}
 
-CONFIRM_WORDS = {"yes", "yes please", "ok", "okay", "sure", "agree", "i agree", "i approve", "i confirm", "confirm", "approve", "tak", "zgadzam sie", "zgadzam się", "zatwierdzam"}
-REJECT_WORDS = {"no", "no thanks", "resign", "i resign", "cancel", "reject", "decline", "nie", "anuluj", "odrzucam"}
+CONFIRM_WORDS = {
+    "yes", "yes please", "ok", "okay", "sure", "agree", "i agree",
+    "i approve", "i confirm", "confirm", "approve", "tak",
+    "zgadzam sie", "zgadzam się", "zatwierdzam",
+}
+REJECT_WORDS = {
+    "no", "no thanks", "resign", "i resign", "cancel", "reject",
+    "decline", "nie", "anuluj", "odrzucam",
+}
 
 # Strict guardrails tailored for Llama 3.2 3B + non-financial users
 PLAIN_ENGLISH_CONSTRAINTS = (
@@ -99,6 +110,20 @@ def extract_json_safe(text: str) -> Dict[str, Any]:
     return json.loads(match.group(0))
 
 
+def _parse_amount(raw: str) -> float:
+    """Handles both English (12,000.50) and European (12 000,50) number formats."""
+    cleaned = raw.strip().replace(" ", "")
+    if "," in cleaned and "." in cleaned:
+        cleaned = cleaned.replace(",", "")
+    elif "," in cleaned:
+        parts = cleaned.split(",")
+        if len(parts[-1]) == 3 and len(parts) >= 2:
+            cleaned = "".join(parts)
+        else:
+            cleaned = cleaned.replace(",", ".")
+    return float(cleaned)
+
+
 def parse_prompt_to_financials(prompt: str, file_snippet: str = "") -> Dict[str, Any]:
     """Deterministically extracts amounts, currencies, balances, and invoices from user text."""
     text = f"{prompt}\n{file_snippet}"
@@ -107,44 +132,78 @@ def parse_prompt_to_financials(prompt: str, file_snippet: str = "") -> Dict[str,
         "base_currency": None,
         "cash_balance": None,
         "safety_buffer": None,
+        "monthly_burn_rate": None,
         "forecast_days": None,
         "invoices": [],
     }
 
-    base_match = re.search(r"(?:rozlicza\s+si[ęe]\s+w|base\s+currency\s+is|operate\s+in)\s+(PLN|EUR|USD|CHF|GBP)", text, re.IGNORECASE)
+    base_match = re.search(
+        r"(?:rozlicza\s+si[ęe]\s+w|base\s+currency\s+is|operate\s+in)\s+(PLN|EUR|USD|CHF|GBP)",
+        text,
+        re.IGNORECASE,
+    )
     if base_match:
         result["base_currency"] = base_match.group(1).upper()
 
-    bal_match = re.search(r"(?:mam\s+na\s+koncie|saldo|got[óo]wk[ia]|balance\s+is|have)\s*[^\d]{0,20}([\d\s]+(?:[.,]\d+)?)\s*(PLN|EUR|USD|CHF|GBP)", text, re.IGNORECASE)
+    bal_match = re.search(
+        r"(?:mam\s+na\s+koncie|saldo|got[óo]wk[ia]|balance\s+is|have)\s*[^\d]{0,20}([\d][\d\s,.]*)\s*(PLN|EUR|USD|CHF|GBP)",
+        text,
+        re.IGNORECASE,
+    )
     if bal_match:
-        result["cash_balance"] = float(bal_match.group(1).replace(" ", "").replace(",", "."))
+        result["cash_balance"] = _parse_amount(bal_match.group(1))
         if not result["base_currency"]:
             result["base_currency"] = bal_match.group(2).upper()
         result["has_custom_numbers"] = True
 
-    buf_match = re.search(r"(?:bufor|safety\s+buffer|buffer)[^\d]{0,20}([\d\s]+(?:[.,]\d+)?)\s*(PLN|EUR|USD|CHF|GBP)", text, re.IGNORECASE)
+    buf_match = re.search(
+        r"(?:bufor|safety\s+buffer|buffer|cushion)[^\d]{0,20}([\d][\d\s,.]*)\s*(PLN|EUR|USD|CHF|GBP)",
+        text,
+        re.IGNORECASE,
+    )
     if buf_match:
-        result["safety_buffer"] = float(buf_match.group(1).replace(" ", "").replace(",", "."))
+        result["safety_buffer"] = _parse_amount(buf_match.group(1))
         result["has_custom_numbers"] = True
+
+    burn_match = re.search(
+        r"(?:burn\s+rate|fixed\s+bills|monthly\s+expenses|koszty\s+sta[łl]e)[^\d]{0,20}([\d][\d\s,.]*)\s*(PLN|EUR|USD|CHF|GBP)",
+        text,
+        re.IGNORECASE,
+    )
+    if burn_match:
+        result["monthly_burn_rate"] = _parse_amount(burn_match.group(1))
+        result["has_custom_numbers"] = True
+
+    days_match = re.search(
+        r"(?:next|przez|w\s+ci[ąa]gu(?:\s+najbli[żz]szych)?)\s+(\d+)\s+(?:days|dni)",
+        text,
+        re.IGNORECASE,
+    )
+    if days_match:
+        result["forecast_days"] = int(days_match.group(1))
 
     clauses = re.split(r"[.;\n]|(?:\s+oraz\s+)|(?:\s+and\s+)|(?:\s+a\s+za\s+)", text)
     for clause in clauses:
         if any(skip in clause.lower() for skip in [
             "na koncie", "in my account", "in account", "balance is", "i have",
-            "bufor", "safety buffer", "buffer",
+            "bufor", "safety buffer", "buffer", "cushion",
+            "burn rate", "fixed bills", "monthly expenses",
             "w ciągu najbliższych", "next 30 days", "in the next",
         ]):
             continue
 
-        amt_match = re.search(r"([\d][\d\s]*(?:[.,]\d+)?)\s*(PLN|EUR|USD|CHF|GBP)", clause, re.IGNORECASE)
+        amt_match = re.search(r"([\d][\d\s,.]*)\s*(PLN|EUR|USD|CHF|GBP)", clause, re.IGNORECASE)
         if not amt_match:
             continue
 
-        amount = float(amt_match.group(1).replace(" ", "").replace(",", "."))
+        amount = _parse_amount(amt_match.group(1))
         currency = amt_match.group(2).upper()
         c_low = clause.lower()
 
-        is_receivable = any(w in c_low for w in ["sprzedaż", "sprzedaz", "wystawiłem", "wystawilem", "klient", "wpływ", "należnoś", "sales", "client", "receivable", "owed to"])
+        is_receivable = any(w in c_low for w in [
+            "sprzedaż", "sprzedaz", "wystawiłem", "wystawilem", "klient",
+            "wpływ", "należnoś", "sales", "client", "receivable", "owed to", "income",
+        ])
         inv_type = "receivable" if is_receivable else "payable"
 
         due_days = 14
@@ -157,7 +216,13 @@ def parse_prompt_to_financials(prompt: str, file_snippet: str = "") -> Dict[str,
 
         vat_match = re.search(r"(\d+)\s*%\s*vat", c_low)
         vat_rate = (int(vat_match.group(1)) / 100.0) if vat_match else (0.19 if currency == "EUR" else 0.0)
-        category = "R&D" if any(w in c_low for w in ["r&d", "b+r", "oprogramowani", "software", "badani", "research"]) else "operations"
+
+        if any(w in c_low for w in ["r&d", "b+r", "oprogramowani", "software", "badani", "research"]):
+            category = "R&D"
+        elif any(w in c_low for w in ["marketing", "equipment", "sprzęt", "sprzet", "capex", "investment", "inwestycj", "optional"]):
+            category = "marketing"
+        else:
+            category = "operations"
 
         result["invoices"].append({
             "contractor": clause.strip()[:45],
@@ -167,7 +232,7 @@ def parse_prompt_to_financials(prompt: str, file_snippet: str = "") -> Dict[str,
             "due_in_days": due_days,
             "type": inv_type,
             "category": category,
-            "is_paid": due_days >= 0,
+            "is_paid": False,
         })
         result["has_custom_numbers"] = True
 
@@ -184,6 +249,7 @@ def parse_prompt_to_financials(prompt: str, file_snippet: str = "") -> Dict[str,
 def get_active_agents():
     return {
         "tax": run_tax_agent,
+        "liquidity": run_liquidity_tool,
     }
 
 
@@ -255,22 +321,46 @@ def analyze_fx(ctx: FinancialContextFX):
 
 @app.post("/cfo/analyze")
 def endpoint_autonomous_cfo(ctx: FinancialContext):
-    active_agents = get_active_agents()
     agents_to_run = route_agents_for_query(ctx)
-    currency = "EUR"
 
     tool_outputs: List[ToolOutput] = []
     combined_prompt_context = []
+    tax_result: ToolOutput | None = None
 
-    for agent_key in agents_to_run:
-        result: ToolOutput = active_agents[agent_key](ctx)
-        tool_outputs.append(result)
-        combined_prompt_context.append(result.prompt_context)
+    # 1. Run TaxAgent first if requested (or needed by LiquidityAgent for tax deadlines)
+    if "tax" in agents_to_run or "liquidity" in agents_to_run:
+        tax_result = run_tax_agent(ctx)
+        if "tax" in agents_to_run:
+            tool_outputs.append(tax_result)
+            combined_prompt_context.append(tax_result.prompt_context)
+
+    # 2. Run LiquidityAgent with TaxAgent synergy + plain-English LLM explanation
+    if "liquidity" in agents_to_run:
+        def liquidity_llm_callback(prompt: str) -> str:
+            return call_llm(
+                system_prompt=(
+                    "You are a helpful cash-flow assistant explaining a temporary money shortage to a non-financial business owner.\n"
+                    f"{PLAIN_ENGLISH_CONSTRAINTS}"
+                    "6. LENGTH: Write exactly 3 short, clear sentences explaining why the bank balance dips and how the recommended step keeps bills paid."
+                ),
+                user_prompt=prompt,
+                max_tokens=300,
+            )
+
+        liq_result = run_liquidity_tool(
+            ctx,
+            llm_callback=liquidity_llm_callback,
+            tax_output=tax_result,
+        )
+        tool_outputs.append(liq_result)
+        combined_prompt_context.append(liq_result.prompt_context)
+
+    currency = ctx.currency.upper()
 
     system_prompt = (
         "You are a friendly business money helper translating financial numbers into plain English for a non-expert owner.\n"
         f"{PLAIN_ENGLISH_CONSTRAINTS}"
-        f"6. CURRENCY: Always express all monetary amounts strictly in {currency} (€). Never use any other currency.\n"
+        f"6. CURRENCY: Always express all monetary amounts strictly in {currency} (€). Never use PLN or any other currency.\n"
         "7. OUTPUT FORMAT: Return ONLY a valid JSON object (no markdown code blocks, no text before or after) with this exact structure:\n"
         "{\n"
         '  "executive_summary": "<3-4 simple, jargon-free sentences explaining the cash situation using ONLY exact numbers from the reports>",\n'
@@ -311,6 +401,7 @@ def endpoint_autonomous_cfo(ctx: FinancialContext):
 
     return {
         "company_name": ctx.company_name,
+        "currency": currency,
         "agents_triggered": [out.agent_name for out in tool_outputs],
         "cfo_decision": parsed,
         "detailed_reports": [out.model_dump() for out in tool_outputs],
@@ -398,7 +489,7 @@ async def frontend_cfo_chat(
             }
             return {
                 "reply": (
-                    f"**Your exchange rate is now locked in with Commerzbank FX Forward.**\n\n"
+                    f"**Your exchange rate is now locked in with Commerzbank.**\n\n"
                     f"- **Confirmation Number:** `{ticket_id}`\n"
                     f"- **Currencies:** {q['pair']} ({q['direction']})\n"
                     f"- **Protected Amount:** {q['notional_amount_fc']:,.2f}\n"
@@ -416,19 +507,25 @@ async def frontend_cfo_chat(
                 "deal_executed": None,
             }
 
-    # 1B. Handle user confirmation ("yes" / "no") for a pending Liquidity backup credit line
+    # 1B. Handle user confirmation ("yes" / "no") for a pending Liquidity action (Deferral or Credit Line)
     if account_key in PENDING_LIQUIDITY_ACTIONS:
         action = PENDING_LIQUIDITY_ACTIONS[account_key]
 
         if clean_prompt in CONFIRM_WORDS:
             del PENDING_LIQUIDITY_ACTIONS[account_key]
             action.status = "APPROVED_EXECUTED_SIMULATED"
+            is_deferral = action.action_type == "DEFER_DISCRETIONARY_OUTFLOW"
+            headline = (
+                "**Your optional spending delay has been scheduled (Sandbox).**"
+                if is_deferral
+                else "**Your backup credit line has been approved (Sandbox).**"
+            )
             return {
                 "reply": (
-                    f"**Your backup credit line has been approved (Sandbox).**\n\n"
+                    f"{headline}\n\n"
                     f"- **Decision ID:** `{action.action_id}`\n"
-                    f"- **Facility:** {action.facility_name}\n"
-                    f"- **Approved Limit:** {action.amount:,.2f} {action.currency}\n"
+                    f"- **Action:** {action.facility_name}\n"
+                    f"- **Protected Amount:** {action.amount:,.2f} {action.currency}\n"
                     f"- **Estimated Monthly Cost:** {action.estimated_monthly_cost:,.2f} {action.currency}\n\n"
                     f"Your temporary cash shortage is now covered."
                 ),
@@ -439,9 +536,14 @@ async def frontend_cfo_chat(
             del PENDING_LIQUIDITY_ACTIONS[account_key]
             action.status = "REJECTED"
             return {
-                "reply": "The backup credit line offer was declined.",
+                "reply": "The cash protection proposal was declined. Your payment schedule remains unchanged.",
                 "action": action.model_dump(),
             }
+
+    # Clear stale pending proposals if the user moved on to a new question
+    if clean_prompt not in CONFIRM_WORDS and clean_prompt not in REJECT_WORDS:
+        PENDING_FX_CONTRACTS.pop(account_key, None)
+        PENDING_LIQUIDITY_ACTIONS.pop(account_key, None)
 
     # Read optional uploaded file
     file_context = ""
@@ -452,28 +554,38 @@ async def frontend_cfo_chat(
         snippet = raw_bytes[:2000].decode("utf-8", errors="ignore")
         file_context = f"\nAttached document ({file.filename}):\n{snippet}\n"
 
-    # Extract custom amounts/invoices from user prompt
+    # Extract custom amounts/invoices from user prompt & uploaded file
     extracted = parse_prompt_to_financials(prompt, file_context)
     has_custom = bool(extracted.get("has_custom_numbers")) or bool(extracted.get("invoices"))
 
-    # 2. Trigger FX Hedging Agent when agent="fx" or the question is about foreign currencies
+    agent_low = agent.strip().lower()
     is_fx_query = (
-        agent.lower() in {"fx", "fx_hedging", "hedging"}
-        or any(w in clean_prompt for w in ["walut", "fx", "forward", "kurs", "chf", "usd", "gbp", "hedg", "currency", "exchange", "rate"])
+        agent_low in {"fx", "fx_hedging", "hedging"}
+        or (
+            agent_low not in {"liquidity", "cashflow", "cash"}
+            and any(w in clean_prompt for w in [
+                "walut", "fx", "forward", "kurs", "chf", "usd", "gbp",
+                "hedg", "currency", "exchange rate",
+            ])
+        )
     )
 
     is_liquidity_query = (
-        agent.lower() in {"liquidity", "cashflow"}
-        or any(w in clean_prompt for w in ["płynnoś", "plynnos", "bufor", "kredyt", "brak gotówki", "runway", "liquidity", "overdraft", "shortage", "buffer"])
+        agent_low in {"liquidity", "cashflow", "cash"}
+        or any(w in clean_prompt for w in [
+            "płynnoś", "plynnos", "gotówk", "cash", "bufor", "kredyt",
+            "brak gotówki", "runway", "liquidity", "overdraft", "shortage", "buffer",
+        ])
     )
 
+    # 2. Trigger FX Hedging Agent
     if is_fx_query:
-        base_curr = extracted.get("base_currency") or "EUR"
+        base_curr = (extracted.get("base_currency") or "EUR").upper()
         raw_invs = extracted.get("invoices") or []
         fx_invoices = [
             InvoiceFX(
                 id=f"INV-FX-{idx+1:02d}",
-                contractor=inv.get("contractor") or f"Supplier {idx+1}",
+                contractor=inv.get("contractor") or f"Partner {idx+1}",
                 amount=float(inv.get("amount", 0)),
                 vat_rate=float(inv.get("vat_rate") or 0.0),
                 currency=(inv.get("currency") or "CHF").upper(),
@@ -485,7 +597,7 @@ async def frontend_cfo_chat(
             if (inv.get("currency") or "").upper() not in {"", base_curr}
         ]
 
-        if not fx_invoices and not has_custom:
+        if not fx_invoices and not has_custom and not has_file:
             fx_invoices = [
                 InvoiceFX(
                     id="INV-FX-01",
@@ -510,8 +622,8 @@ async def frontend_cfo_chat(
         fx_ctx = FinancialContextFX(
             company_name=account,
             base_currency=base_curr,
-            cash_balance=float(extracted.get("cash_balance") or 342500.0),
-            monthly_burn_rate=45000.0,
+            cash_balance=float(extracted.get("cash_balance") if extracted.get("cash_balance") is not None else 342500.0),
+            monthly_burn_rate=float(extracted.get("monthly_burn_rate") if extracted.get("monthly_burn_rate") is not None else 45000.0),
             user_query=prompt,
             invoices=fx_invoices,
         )
@@ -523,15 +635,15 @@ async def frontend_cfo_chat(
             q = rec["quote_details"]
 
             system_prompt = (
-                "You are the FX Hedging AI Agent inside FinancAI.lly powered by Commerzbank.\n"
+                "You are the Currency Protection Helper inside FinancAI.lly powered by Commerzbank.\n"
                 f"{PLAIN_ENGLISH_CONSTRAINTS}"
-                "Explain ALL detected currency exposures and recommended Commerzbank rate-lock options using ONLY the exact numbers from the JSON. "
-                "Always end by asking the user explicitly if they want to lock in this exchange rate (e.g. 'Would you like to lock in this exchange rate now? Please reply: yes or no')."
+                "Explain all detected foreign currency invoices simply, and highlight the primary Commerzbank rate-lock offer using ONLY exact numbers from the JSON. "
+                "Always end by asking the user clearly if they want to lock in the primary exchange rate right now (e.g. 'Would you like to lock in this exchange rate now? Please reply: yes or no')."
             )
             user_prompt = (
                 f"Account: {account}\n"
-                f"FX Telemetry: {fx_report.prompt_context}\n"
-                f"Recommended Contracts: {json.dumps(fx_report.recommendations, ensure_ascii=False)}\n"
+                f"Currency Summary: {fx_report.prompt_context}\n"
+                f"Recommended Rate-Lock Offers: {json.dumps(fx_report.recommendations, ensure_ascii=False)}\n"
                 f"User message: {prompt}"
             )
 
@@ -551,35 +663,119 @@ async def frontend_cfo_chat(
                 "fx_telemetry": fx_report.model_dump(),
                 "pending_approval": True,
             }
+        return {
+            "reply": (
+                f"Currency Exposure Analysis ({base_curr})\n\n"
+                f"{fx_report.prompt_context}\n\n"
+                f"Would you like me to lock in a Commerzbank FX Forward rate for these foreign invoices? Please reply: yes or no."
+            ),
+            "fx_telemetry": fx_report.model_dump(),
+        }
 
-    # 3. Trigger Liquidity Agent
+    # 3. Trigger Liquidity Agent (with discretionary spending priority + TaxAgent synergy)
     if is_liquidity_query:
         today = date.today()
-        curr = extracted.get("base_currency") or "EUR"
+        curr = (extracted.get("base_currency") or "EUR").upper()
         balance = float(extracted.get("cash_balance") if extracted.get("cash_balance") is not None else 25000.0)
         buffer = float(extracted.get("safety_buffer") if extracted.get("safety_buffer") is not None else 10000.0)
         horizon = int(extracted.get("forecast_days") or 30)
 
-        scheduled_txs = []
+        scheduled_txs: List[ScheduledTransaction] = []
+        tax_invoices: List[Invoice] = []
+
         for idx, inv in enumerate(extracted.get("invoices") or []):
+            if inv.get("is_paid", False):
+                continue
             amt = float(inv.get("amount", 0))
-            signed_amt = -abs(amt) if inv.get("type", "payable") == "payable" else abs(amt)
-            due_days = max(1, int(inv.get("due_in_days") or (idx + 1) * 5))
+            vat_rate = float(inv.get("vat_rate") if inv.get("vat_rate") is not None else 0.0)
+            gross_amt = round(amt * (1.0 + vat_rate), 2)
+            inv_type = inv.get("type") or "payable"
+            signed_amt = -abs(gross_amt) if inv_type == "payable" else abs(gross_amt)
+            due_days = max(1, int(inv.get("due_in_days") if inv.get("due_in_days") is not None else (idx + 1) * 5))
+            raw_cat = (inv.get("category") or "operations").strip()
+            is_disc = bool(
+                inv.get("is_discretionary")
+                or (inv_type == "payable" and raw_cat.lower() in DISCRETIONARY_CATEGORIES)
+            )
+
             scheduled_txs.append(
                 ScheduledTransaction(
-                    id=f"TX-{idx+1:02d}",
                     due_date=today + timedelta(days=due_days),
-                    counterparty=inv.get("contractor") or f"Vendor {idx+1}",
-                    category=inv.get("category") or "OPERATIONS",
+                    counterparty=inv.get("contractor") or f"Partner {idx+1}",
+                    category=raw_cat.upper(),
                     amount=signed_amt,
+                    is_discretionary=is_disc,
+                )
+            )
+            tax_invoices.append(
+                Invoice(
+                    id=f"FV/{idx+1:02d}",
+                    contractor=inv.get("contractor") or f"Partner {idx+1}",
+                    amount=amt,
+                    vat_rate=vat_rate,
+                    currency=curr,
+                    due_in_days=due_days,
+                    type=inv_type,
+                    category=raw_cat,
+                    is_paid=False,
                 )
             )
 
-        if not scheduled_txs and not has_custom:
+        if not scheduled_txs and not has_custom and not has_file:
             scheduled_txs = [
-                ScheduledTransaction(id="TX-01", due_date=today + timedelta(days=10), counterparty="Equipment Supplier", category="EQUIPMENT", amount=-32000.0),
-                ScheduledTransaction(id="TX-02", due_date=today + timedelta(days=15), counterparty="Office Rent", category="RENT", amount=-4000.0),
+                ScheduledTransaction(
+                    due_date=today + timedelta(days=10),
+                    counterparty="Equipment Supplier",
+                    category="EQUIPMENT",
+                    amount=-32000.0,
+                    is_discretionary=True,
+                ),
+                ScheduledTransaction(
+                    due_date=today + timedelta(days=15),
+                    counterparty="Office Rent",
+                    category="RENT",
+                    amount=-4000.0,
+                    is_discretionary=False,
+                ),
             ]
+
+        # Inject upcoming Income Tax (CIT) and Sales Tax (VAT) bills from TaxAgent
+        if tax_invoices:
+            burn_for_tax = float(extracted.get("monthly_burn_rate") if extracted.get("monthly_burn_rate") is not None else 0.0)
+            tax_preview = run_tax_agent(
+                FinancialContext(
+                    company_name=account,
+                    currency=curr,
+                    cash_balance_eur=balance,
+                    monthly_burn_rate_eur=burn_for_tax,
+                    invoices=tax_invoices,
+                )
+            )
+            cit_due = float(tax_preview.metrics.get("cit_advance_to_pay_eur", 0.0))
+            cit_days = max(1, int(tax_preview.metrics.get("days_to_cit_deadline", 15)))
+            if cit_due > 0:
+                scheduled_txs.append(
+                    ScheduledTransaction(
+                        due_date=today + timedelta(days=cit_days),
+                        counterparty="Tax Office — Corporate Income Tax",
+                        category="TAX",
+                        amount=-round(cit_due, 2),
+                        is_discretionary=False,
+                    )
+                )
+
+            vat_due = float(tax_preview.metrics.get("vat_to_pay_eur", 0.0))
+            vat_days = max(1, int(tax_preview.metrics.get("days_to_vat_deadline", 20)))
+            if vat_due > 0:
+                scheduled_txs.append(
+                    ScheduledTransaction(
+                        due_date=today + timedelta(days=vat_days),
+                        counterparty="Tax Office — Sales Tax (VAT)",
+                        category="TAX",
+                        amount=-round(vat_due, 2),
+                        is_discretionary=False,
+                    )
+                )
 
         liq_req = LiquidityAnalysisRequest(
             company_name=account,
@@ -592,17 +788,22 @@ async def frontend_cfo_chat(
         )
 
         def liq_llm_cb(p: str) -> str:
-            return call_llm(f"Explain the cash shortage simply.\n{PLAIN_ENGLISH_CONSTRAINTS}", p, max_tokens=250)
+            return call_llm(
+                f"You are a cash-flow helper explaining a temporary money dip simply.\n{PLAIN_ENGLISH_CONSTRAINTS}",
+                p,
+                max_tokens=250,
+            )
 
         liq_resp = run_liquidity_agent(liq_req, liq_llm_cb)
         if liq_resp.proposed_action:
             PENDING_LIQUIDITY_ACTIONS[account_key] = liq_resp.proposed_action
 
         system_prompt = (
-            "You are the Liquidity Helper inside FinancAI.lly running on Red Hat OpenShift AI.\n"
+            "You are the Cash-Flow Guardian inside FinancAI.lly running on Red Hat OpenShift AI.\n"
             f"{PLAIN_ENGLISH_CONSTRAINTS}"
             "Report ONLY the exact numbers calculated by the Liquidity tool below. Do not invent numbers. "
-            "If proposed_action is present, end by asking: 'Would you like to activate this backup credit line in preview mode? Please reply: yes or no'."
+            "Explain clearly if delaying optional spending solves the cash gap for free, or if a backup credit line is needed. "
+            "If proposed_action is present, end by asking: 'Would you like to approve this cash-protection plan in preview mode? Please reply: yes or no'."
         )
         user_prompt = (
             f"Liquidity Tool Result: {json.dumps(liq_resp.model_dump(), default=str, ensure_ascii=False)}\n"
@@ -617,7 +818,8 @@ async def frontend_cfo_chat(
 
     # 4. Default: Tax Prep AI Agent
     is_lukas = "lukas" in account.lower()
-    cash_eur = float(extracted.get("cash_balance") or (890000.0 if is_lukas else 342500.0))
+    default_cash = 890000.0 if is_lukas else 342500.0
+    cash_eur = float(extracted.get("cash_balance") if extracted.get("cash_balance") is not None else default_cash)
 
     parsed_tax_invoices = [
         Invoice(
@@ -629,7 +831,7 @@ async def frontend_cfo_chat(
             due_in_days=int(inv.get("due_in_days") if inv.get("due_in_days") is not None else 14),
             type=inv.get("type") or "payable",
             category=inv.get("category") or "operations",
-            is_paid=bool(inv.get("is_paid", inv.get("due_in_days", 1) >= 0)),
+            is_paid=bool(inv.get("is_paid", False)),
         )
         for idx, inv in enumerate(extracted.get("invoices") or [])
     ]
@@ -640,9 +842,12 @@ async def frontend_cfo_chat(
             Invoice(id="FV/02", contractor="AI & Cloud R&D Lab", amount=40000.0, vat_rate=0.19, due_in_days=5, type="payable", category="R&D"),
         ]
 
-    burn_rate = 0.0 if has_custom else 45000.0
+    default_burn = 0.0 if (has_custom or has_file) else 45000.0
+    burn_rate = float(extracted.get("monthly_burn_rate") if extracted.get("monthly_burn_rate") is not None else default_burn)
+
     demo_ctx = FinancialContext(
         company_name=account,
+        currency="EUR",
         cash_balance_eur=cash_eur,
         monthly_burn_rate_eur=burn_rate,
         cit_rate=0.09,
