@@ -453,10 +453,22 @@ function LiquidityForecastChart({ chart, isDark }) {
           Buffer ({buffer.toLocaleString()})
         </text>
 
-        <text x={padLeft - 8} y={padTop + 4} textAnchor="end" fill={isDark ? '#a3a3a3' : '#57534e'} fontSize="10">
+        <text
+          x={padLeft - 8}
+          y={padTop + 4}
+          textAnchor="end"
+          fill={isDark ? '#a3a3a3' : '#57534e'}
+          fontSize="10"
+        >
           {maxVal.toLocaleString()}
         </text>
-        <text x={padLeft - 8} y={height - padBottom} textAnchor="end" fill={isDark ? '#a3a3a3' : '#57534e'} fontSize="10">
+        <text
+          x={padLeft - 8}
+          y={height - padBottom}
+          textAnchor="end"
+          fill={isDark ? '#a3a3a3' : '#57534e'}
+          fontSize="10"
+        >
           {minVal.toLocaleString()}
         </text>
 
@@ -1866,6 +1878,25 @@ export default function App() {
                     : isDark
                     ? 'bg-neutral-800 hover:bg-neutral-700 text-white border-neutral-700 cursor-pointer'
                     : 'bg-[#efe8db] hover:bg-[#e5dccb] text-stone-950 border-[#cfc3ae] cursor-pointer'
+                }`}
+              >
+                <span>📈 Show Chart</span>
+              </button>
+            </div>
+
+            {/* Bottom-left Show Chart button */}
+            <div
+              className={`pt-3 mt-3 border-t shrink-0 ${
+                isDark ? 'border-neutral-800' : 'border-[#dfd6c5]'
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => setChartModalOpen(true)}
+                className={`w-full py-2.5 px-3 rounded-lg border text-xs font-mono font-semibold flex items-center justify-center gap-2 transition cursor-pointer ${
+                  isDark
+                    ? 'bg-neutral-800 hover:bg-neutral-700 text-white border-neutral-700'
+                    : 'bg-[#efe8db] hover:bg-[#e5dccb] text-stone-950 border-[#cfc3ae]'
                 }`}
               >
                 <span>📈 Show Chart</span>
