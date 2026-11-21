@@ -499,7 +499,10 @@ async def frontend_cfo_chat(
     file: UploadFile | None = File(None),
 ):
     """Endpoint matched 1:1 to FormData in handleSend() in frontend/src/App.jsx (supports FX, Liquidity & Tax)."""
-    clean_prompt = prompt.strip().lower().rstrip(".!?")
+    # Strip appended [Workspace ...] blocks and "User Question:" prefix so yes/no confirmations always match
+    stripped_prompt = re.sub(r"\[Workspace[^\]]*\]", "", prompt, flags=re.IGNORECASE | re.DOTALL).strip()
+    stripped_prompt = re.sub(r"^user\s+question\s*:\s*", "", stripped_prompt, flags=re.IGNORECASE).strip()
+    clean_prompt = stripped_prompt.lower().rstrip(".!?")
     account_key = account.strip().lower()
 
     # 1A. Handle user confirmation ("yes" / "no") for a pending Commerzbank FX rate lock
@@ -593,7 +596,7 @@ async def frontend_cfo_chat(
         snippet = raw_bytes[:2000].decode("utf-8", errors="ignore")
         file_context = f"\nAttached document ({file.filename}):\n{snippet}\n"
 
-    extracted = parse_prompt_to_financials(prompt, file_context)
+    extracted = parse_prompt_to_financials(stripped_prompt, file_context)
     has_custom = bool(extracted.get("has_custom_numbers")) or bool(extracted.get("invoices"))
 
     bank_cash_eur, bank_tax_invs, bank_fx_invs, bank_sched_txs = fetch_bank_financials(account_key)
@@ -685,7 +688,7 @@ async def frontend_cfo_chat(
             base_currency=base_curr,
             cash_balance=float(extracted.get("cash_balance") if extracted.get("cash_balance") is not None else bank_cash_eur),
             monthly_burn_rate=float(extracted.get("monthly_burn_rate") if extracted.get("monthly_burn_rate") is not None else 0.0),
-            user_query=prompt,
+            user_query=stripped_prompt,
             invoices=fx_invoices,
         )
         fx_report = run_fx_hedging_agent(fx_ctx)
@@ -705,7 +708,7 @@ async def frontend_cfo_chat(
                 f"Account: {account}\n"
                 f"Currency Summary: {fx_report.prompt_context}\n"
                 f"Recommended Rate-Lock Offers: {json.dumps(fx_report.recommendations, ensure_ascii=False)}\n"
-                f"User message: {prompt}"
+                f"User message: {stripped_prompt}"
             )
 
             try:
@@ -888,7 +891,7 @@ async def frontend_cfo_chat(
         )
         user_prompt = (
             f"Liquidity Tool Result: {json.dumps(liq_dump, default=str, ensure_ascii=False)}\n"
-            f"User question: {prompt}"
+            f"User question: {stripped_prompt}"
         )
         reply_text = call_llm(system_prompt, user_prompt, max_tokens=650)
         return {
@@ -928,7 +931,7 @@ async def frontend_cfo_chat(
         monthly_burn_rate_eur=burn_rate,
         cit_rate=0.30,
         day_of_month=date.today().day,
-        user_query=prompt,
+        user_query=stripped_prompt,
         invoices=parsed_tax_invoices,
     )
     tax_report = run_tax_agent(demo_ctx)
@@ -984,7 +987,7 @@ async def frontend_cfo_chat(
         f"Tax Tool Metrics: {json.dumps(tax_report.metrics, ensure_ascii=False)}\n"
         f"Tax Tool Recommendations: {json.dumps(tax_report.recommendations, ensure_ascii=False)}"
         f"{file_context}\n"
-        f"User question: {prompt}"
+        f"User question: {stripped_prompt}"
     )
 
     reply_text = call_llm(system_prompt, user_prompt, max_tokens=750)

@@ -1187,7 +1187,12 @@ export default function App() {
     if (fileInputRef.current) fileInputRef.current.value = '';
     setLoading(true);
 
-    if (!currentFile) {
+    const isConfirmationReply =
+      /^(yes|yes please|ok|okay|sure|agree|i agree|i approve|i confirm|confirm|approve|no|no thanks|resign|i resign|cancel|reject|decline|tak|zgadzam sie|zgadzam się|zatwierdzam|nie|anuluj|odrzucam)[.!?]*$/i.test(
+        userText.trim()
+      );
+
+    if (!currentFile && !isConfirmationReply) {
       const directReply = detectDirectAccountReply(
         userText,
         activeAccount,
@@ -1224,17 +1229,18 @@ export default function App() {
         userText
       ) || Boolean(currentFile);
 
-    const contextualPrompt =
-      bankConnected && spawnedInvoices.length > 0 && asksAboutInvoicesOrForecast && !hasInlineNumbers
-        ? `User Question: ${userText}\n\n[Workspace Context — Account: ${activeAccount.name}, IBAN: ${activeAccount.iban}, Tax ID: ${activeAccount.taxId}, Safety Buffer: ${formatEuro(activeAccount.safetyBuffer)}, Open Invoices: ${spawnedInvoices
-            .map(
-              (inv) =>
-                `${inv.id} (${inv.contractor}: ${inv.type === 'receivable' ? '+' : '-'}${inv.amount} ${inv.currency}, due in ${inv.dueInDays}d)`
-            )
-            .join('; ')}]`
-        : hasInlineNumbers
-        ? userText
-        : `User Question: ${userText}\n\n[Workspace Profile — Account: ${activeAccount.name}, Email: ${activeAccount.email}, IBAN: ${activeAccount.iban}, Tax ID: ${activeAccount.taxId}, Safety Buffer: ${formatEuro(activeAccount.safetyBuffer)}. Answer ONLY the user's specific question directly and concisely without listing invoices unless requested.]`;
+    const contextualPrompt = isConfirmationReply
+      ? userText.trim()
+      : bankConnected && spawnedInvoices.length > 0 && asksAboutInvoicesOrForecast && !hasInlineNumbers
+      ? `User Question: ${userText}\n\n[Workspace Context — Account: ${activeAccount.name}, IBAN: ${activeAccount.iban}, Tax ID: ${activeAccount.taxId}, Safety Buffer: ${formatEuro(activeAccount.safetyBuffer)}, Open Invoices: ${spawnedInvoices
+          .map(
+            (inv) =>
+              `${inv.id} (${inv.contractor}: ${inv.type === 'receivable' ? '+' : '-'}${inv.amount} ${inv.currency}, due in ${inv.dueInDays}d)`
+          )
+          .join('; ')}]`
+      : hasInlineNumbers
+      ? userText
+      : `User Question: ${userText}\n\n[Workspace Profile — Account: ${activeAccount.name}, Email: ${activeAccount.email}, IBAN: ${activeAccount.iban}, Tax ID: ${activeAccount.taxId}, Safety Buffer: ${formatEuro(activeAccount.safetyBuffer)}. Answer ONLY the user's specific question directly and concisely without listing invoices unless requested.]`;
 
     try {
       const formData = new FormData();
@@ -1836,10 +1842,10 @@ export default function App() {
                         onClick={() =>
                           setInput(
                             `Analyze bank invoice ${inv.id} (${inv.contractor}, ${
-                              isReceivable ? '+' : '-'
-                            }${inv.amount.toLocaleString()} ${inv.currency}, due in ${
-                              inv.dueInDays
-                            } days)`
+                              isReceivable ? 'receivable' : 'payable'
+                            } ${inv.amount.toLocaleString()} ${inv.currency}, category ${
+                              inv.category
+                            }, due in ${inv.dueInDays} days)`
                           )
                         }
                         title="Click to ask AI about this invoice"
