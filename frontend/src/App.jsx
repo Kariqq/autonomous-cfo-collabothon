@@ -1,9 +1,29 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { GoogleLogin } from '@react-oauth/google';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || "https://cfo-backend-api-autonomous-cfo-collabothon.apps.ocp.fr79k.sandbox786.opentlc.com";
+const API_BASE_URL =
+  import.meta.env.VITE_API_URL ||
+  'https://cfo-backend-api-autonomous-cfo-collabothon.apps.ocp.fr79k.sandbox786.opentlc.com';
 const STORAGE_KEY_ACCOUNTS = 'financiailly_accounts_v1';
 const STORAGE_KEY_ACTIVE = 'financiailly_active_id_v1';
+
+const TESTER_ACCOUNT = {
+  id: 'acc-tester',
+  name: 'Tester Account',
+  ownerName: 'Tester',
+  email: 'tester@financiai.lly',
+  password: 'tester123',
+  initials: 'TA',
+  role: 'Tester • Owner',
+  iban: 'DE12 5004 0000 0194 8820 00',
+  taxId: 'DE 401 992 118',
+  liquidity: 250000,
+  taxLiability: '-€21,000 (Q3)',
+  taxSavings: '+€6,200',
+  safetyBuffer: 40000,
+  autoApproveSmall: false,
+  sandboxMode: true,
+  provider: 'tester',
+};
 
 const TAX_PROPOSAL = {
   id: 'tax-01',
@@ -17,25 +37,15 @@ const TAX_PROPOSAL = {
   governance: 'REQUIRES USER APPROVAL',
 };
 
-function decodeGoogleJwt(token) {
-  const base64Url = token.split('.')[1];
-  const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-  const jsonPayload = decodeURIComponent(
-    atob(base64)
-      .split('')
-      .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-      .join('')
-  );
-  return JSON.parse(jsonPayload);
-}
-
 export default function App() {
   const [accounts, setAccounts] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_ACCOUNTS);
-      return saved ? JSON.parse(saved) : [];
+      const parsed = saved ? JSON.parse(saved) : [];
+      const hasTester = parsed.some((a) => a.id === TESTER_ACCOUNT.id);
+      return hasTester ? parsed : [TESTER_ACCOUNT, ...parsed];
     } catch {
-      return [];
+      return [TESTER_ACCOUNT];
     }
   });
 
@@ -46,8 +56,11 @@ export default function App() {
   const [isSignedIn, setIsSignedIn] = useState(() => {
     try {
       const savedAccounts = JSON.parse(localStorage.getItem(STORAGE_KEY_ACCOUNTS) || '[]');
+      const allAccounts = savedAccounts.some((a) => a.id === TESTER_ACCOUNT.id)
+        ? savedAccounts
+        : [TESTER_ACCOUNT, ...savedAccounts];
       const savedActive = localStorage.getItem(STORAGE_KEY_ACTIVE);
-      return Boolean(savedActive && savedAccounts.some((a) => a.id === savedActive));
+      return Boolean(savedActive && allAccounts.some((a) => a.id === savedActive));
     } catch {
       return false;
     }
@@ -57,11 +70,8 @@ export default function App() {
   const [accountModalTab, setAccountModalTab] = useState('switch');
   const [authError, setAuthError] = useState('');
 
-  const [authMode, setAuthMode] = useState('signin');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
-  const [authConfirmPassword, setAuthConfirmPassword] = useState('');
-  const [authDisplayName, setAuthDisplayName] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
 
   const [decision, setDecision] = useState('pending');
@@ -145,62 +155,15 @@ export default function App() {
     ]);
   };
 
-  const handleGoogleSuccess = (credentialResponse) => {
-    try {
-      setAuthError('');
-      const profile = decodeGoogleJwt(credentialResponse.credential);
-      const email = profile.email.toLowerCase();
-      const fullName = profile.name || email.split('@')[0];
-      const picture = profile.picture || '';
-
-      const existing = accounts.find((a) => a.email.toLowerCase() === email);
-      if (existing) {
-        setAccounts((prev) =>
-          prev.map((a) =>
-            a.id === existing.id
-              ? { ...a, picture, ownerName: fullName, name: fullName, provider: 'google' }
-              : a
-          )
-        );
-        setActiveAccountId(existing.id);
-        setIsSignedIn(true);
-        addLog(`Signed in with Google (${email})`);
-      } else {
-        const initials = fullName
-          .split(' ')
-          .slice(0, 2)
-          .map((w) => w[0]?.toUpperCase())
-          .join('');
-
-        const newAcc = {
-          id: `acc-${Date.now()}`,
-          name: fullName,
-          ownerName: fullName,
-          email,
-          picture,
-          initials: initials || 'GM',
-          role: 'Google Account • Owner',
-          iban: 'DE61 5004 0000 0412 9901 00',
-          taxId: 'DE 319 774 205',
-          liquidity: 215000,
-          taxLiability: '-€19,800 (Q3)',
-          taxSavings: '+€8,400',
-          safetyBuffer: 40000,
-          autoApproveSmall: false,
-          sandboxMode: true,
-          provider: 'google',
-        };
-        setAccounts((prev) => [...prev, newAcc]);
-        setActiveAccountId(newAcc.id);
-        setIsSignedIn(true);
-        addLog(`Created account & signed in with Google (${email})`);
-      }
-
-      setAccountModalTab('switch');
-      setAccountModalOpen(false);
-    } catch {
-      setAuthError('Could not verify Google account token. Check VITE_GOOGLE_CLIENT_ID in .env.');
-    }
+  const handleTesterQuickLogin = () => {
+    setAuthError('');
+    setActiveAccountId(TESTER_ACCOUNT.id);
+    setIsSignedIn(true);
+    addLog(`Signed in (${TESTER_ACCOUNT.email})`);
+    setAuthEmail('');
+    setAuthPassword('');
+    setAccountModalTab('switch');
+    setAccountModalOpen(false);
   };
 
   const handleEmailAuthSubmit = async (e) => {
@@ -213,30 +176,13 @@ export default function App() {
       return;
     }
 
-    if (authMode === 'signup') {
-      if (authPassword.length < 6) {
-        setAuthError('Password must be at least 6 characters.');
-        return;
-      }
-      if (authPassword !== authConfirmPassword) {
-        setAuthError('Passwords do not match.');
-        return;
-      }
-      if (accounts.some((a) => a.email.toLowerCase() === email)) {
-        setAuthError('An account with this email already exists. Switch to Sign In.');
-        return;
-      }
-    }
-
     setAuthLoading(true);
-    const endpoint = authMode === 'signup' ? '/api/auth/register' : '/api/auth/login';
 
     try {
-      const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+      const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: authDisplayName.trim(),
           email,
           password: authPassword,
         }),
@@ -256,72 +202,32 @@ export default function App() {
       });
       setActiveAccountId(serverUser.id);
       setIsSignedIn(true);
-      addLog(
-        authMode === 'signup'
-          ? `Registered new account (${serverUser.email})`
-          : `Signed in (${serverUser.email})`
-      );
+      addLog(`Signed in (${serverUser.email})`);
       setAuthEmail('');
       setAuthPassword('');
-      setAuthConfirmPassword('');
-      setAuthDisplayName('');
       setAccountModalTab('switch');
       setAccountModalOpen(false);
       setAuthLoading(false);
     } catch {
       const existing = accounts.find((a) => a.email.toLowerCase() === email);
 
-      if (authMode === 'signin') {
-        if (!existing) {
-          setAuthError('No account found with this email. Switch to Create Account to register.');
-          setAuthLoading(false);
-          return;
-        }
-        setActiveAccountId(existing.id);
-        setIsSignedIn(true);
-        addLog(`Signed in (${existing.email})`);
-      } else {
-        const localPart = email.split('@')[0] || 'User';
-        const formattedOwner = localPart
-          .split(/[._-]/)
-          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-          .join(' ');
-        const accountName = authDisplayName.trim() || formattedOwner;
-        const initials = accountName
-          .split(' ')
-          .slice(0, 2)
-          .map((w) => w[0]?.toUpperCase())
-          .join('');
-
-        const created = {
-          id: `acc-${Date.now()}`,
-          name: accountName,
-          ownerName: formattedOwner,
-          email,
-          picture: '',
-          initials: initials || 'AC',
-          role: 'Account • Owner',
-          iban: 'DE12 5004 0000 0194 8820 00',
-          taxId: 'DE 401 992 118',
-          liquidity: 250000,
-          taxLiability: '-€21,000 (Q3)',
-          taxSavings: '+€6,200',
-          safetyBuffer: 40000,
-          autoApproveSmall: false,
-          sandboxMode: true,
-          provider: 'email',
-        };
-
-        setAccounts((prev) => [...prev, created]);
-        setActiveAccountId(created.id);
-        setIsSignedIn(true);
-        addLog(`Registered new account (${email})`);
+      if (!existing) {
+        setAuthError('Invalid credentials. Use tester@financiai.lly / tester123.');
+        setAuthLoading(false);
+        return;
       }
 
+      if (existing.password && existing.password !== authPassword) {
+        setAuthError('Invalid email or password.');
+        setAuthLoading(false);
+        return;
+      }
+
+      setActiveAccountId(existing.id);
+      setIsSignedIn(true);
+      addLog(`Signed in (${existing.email})`);
       setAuthEmail('');
       setAuthPassword('');
-      setAuthConfirmPassword('');
-      setAuthDisplayName('');
       setAccountModalTab('switch');
       setAccountModalOpen(false);
       setAuthLoading(false);
@@ -335,7 +241,6 @@ export default function App() {
     setIsSignedIn(false);
     setActiveAccountId('');
     setAccountModalOpen(false);
-    setAuthMode('signin');
     setAuthError('');
   };
 
@@ -412,84 +317,12 @@ export default function App() {
                 Financ<span className="text-neutral-400">AI</span>.lly
               </h1>
               <p className="text-xs text-neutral-400 mt-1">
-                Sign in or create an account to continue
+                Sign in to continue
               </p>
             </div>
           </div>
 
-          <div className="flex flex-col items-center justify-center p-4 rounded-xl bg-neutral-950 border border-neutral-800 space-y-2.5">
-            <div className="text-[11px] font-mono text-neutral-400">
-              CONTINUE WITH GOOGLE
-            </div>
-            <GoogleLogin
-              theme="filled_black"
-              size="large"
-              shape="rectangular"
-              text="continue_with"
-              onSuccess={handleGoogleSuccess}
-              onError={() =>
-                setAuthError(
-                  'Google Sign-In failed. Check VITE_GOOGLE_CLIENT_ID and Test users in Google Cloud.'
-                )
-              }
-            />
-          </div>
-
-          <div className="relative flex items-center">
-            <div className="flex-grow border-t border-neutral-800" />
-            <span className="shrink mx-3 text-[11px] font-mono text-neutral-500">
-              OR WITH EMAIL
-            </span>
-            <div className="flex-grow border-t border-neutral-800" />
-          </div>
-
           <form onSubmit={handleEmailAuthSubmit} className="space-y-3 text-xs">
-            <div className="flex gap-2 p-1 rounded-lg bg-neutral-950 border border-neutral-800 font-mono">
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthMode('signin');
-                  setAuthError('');
-                }}
-                className={`flex-1 py-1.5 rounded-md transition ${
-                  authMode === 'signin'
-                    ? 'bg-neutral-800 text-white'
-                    : 'text-neutral-400 hover:text-neutral-200'
-                }`}
-              >
-                Sign In
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthMode('signup');
-                  setAuthError('');
-                }}
-                className={`flex-1 py-1.5 rounded-md transition ${
-                  authMode === 'signup'
-                    ? 'bg-neutral-800 text-white'
-                    : 'text-neutral-400 hover:text-neutral-200'
-                }`}
-              >
-                Create Account
-              </button>
-            </div>
-
-            {authMode === 'signup' && (
-              <div>
-                <label className="block font-mono text-neutral-400 mb-1">
-                  FULL NAME
-                </label>
-                <input
-                  type="text"
-                  value={authDisplayName}
-                  onChange={(e) => setAuthDisplayName(e.target.value)}
-                  placeholder="Your name"
-                  className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-white"
-                />
-              </div>
-            )}
-
             <div>
               <label className="block font-mono text-neutral-400 mb-1">
                 EMAIL ADDRESS *
@@ -499,7 +332,7 @@ export default function App() {
                 required
                 value={authEmail}
                 onChange={(e) => setAuthEmail(e.target.value)}
-                placeholder="name@gmail.com"
+                placeholder="tester@financiai.lly"
                 className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-white"
               />
             </div>
@@ -518,22 +351,6 @@ export default function App() {
               />
             </div>
 
-            {authMode === 'signup' && (
-              <div>
-                <label className="block font-mono text-neutral-400 mb-1">
-                  CONFIRM PASSWORD *
-                </label>
-                <input
-                  type="password"
-                  required
-                  value={authConfirmPassword}
-                  onChange={(e) => setAuthConfirmPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-white"
-                />
-              </div>
-            )}
-
             {authError && (
               <p className="text-[11px] text-rose-400">{authError}</p>
             )}
@@ -543,47 +360,33 @@ export default function App() {
               disabled={authLoading}
               className="w-full py-2.5 rounded-lg bg-white hover:bg-neutral-200 text-neutral-950 font-semibold text-sm transition cursor-pointer"
             >
-              {authLoading
-                ? 'Authenticating...'
-                : authMode === 'signin'
-                ? 'Sign In'
-                : 'Create Account'}
+              {authLoading ? 'Authenticating...' : 'Sign In'}
             </button>
           </form>
 
-          {accounts.length > 0 && (
-            <div className="pt-2 border-t border-neutral-800 space-y-2">
-              <div className="text-[11px] font-mono text-neutral-500 uppercase">
-                Saved Accounts
-              </div>
-              <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
-                {accounts.map((acc) => (
-                  <button
-                    key={acc.id}
-                    type="button"
-                    onClick={() => {
-                      setActiveAccountId(acc.id);
-                      setIsSignedIn(true);
-                      addLog(`Signed in (${acc.email})`);
-                    }}
-                    className="w-full p-2.5 rounded-lg bg-neutral-950 hover:bg-neutral-800 border border-neutral-800 text-left flex items-center justify-between transition cursor-pointer"
-                  >
-                    <div className="min-w-0">
-                      <div className="text-xs font-semibold text-white truncate">
-                        {acc.name}
-                      </div>
-                      <div className="text-[10px] font-mono text-neutral-400 truncate">
-                        {acc.email}
-                      </div>
-                    </div>
-                    <span className="text-[10px] font-mono text-neutral-400 shrink-0">
-                      Sign In →
-                    </span>
-                  </button>
-                ))}
-              </div>
+          <div className="pt-2 border-t border-neutral-800 space-y-2">
+            <div className="flex items-center justify-between text-[11px] font-mono text-neutral-500 uppercase">
+              <span>Tester Account</span>
+              <span>tester@financiai.lly / tester123</span>
             </div>
-          )}
+            <button
+              type="button"
+              onClick={handleTesterQuickLogin}
+              className="w-full p-2.5 rounded-lg bg-neutral-950 hover:bg-neutral-800 border border-neutral-800 text-left flex items-center justify-between transition cursor-pointer"
+            >
+              <div className="min-w-0">
+                <div className="text-xs font-semibold text-white truncate">
+                  {TESTER_ACCOUNT.name}
+                </div>
+                <div className="text-[10px] font-mono text-neutral-400 truncate">
+                  {TESTER_ACCOUNT.email}
+                </div>
+              </div>
+              <span className="text-[10px] font-mono text-neutral-400 shrink-0">
+                Sign In →
+              </span>
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -668,17 +471,9 @@ export default function App() {
             }}
             className="flex items-center gap-3 min-w-0 text-left hover:opacity-90 transition cursor-pointer flex-1"
           >
-            {activeAccount.picture ? (
-              <img
-                src={activeAccount.picture}
-                alt={activeAccount.ownerName}
-                className="w-9 h-9 rounded-lg object-cover border border-neutral-700 shrink-0"
-              />
-            ) : (
-              <div className="w-9 h-9 rounded-lg bg-neutral-800 border border-neutral-700 text-neutral-200 flex items-center justify-center font-mono font-bold text-xs shrink-0">
-                {activeAccount.initials}
-              </div>
-            )}
+            <div className="w-9 h-9 rounded-lg bg-neutral-800 border border-neutral-700 text-neutral-200 flex items-center justify-center font-mono font-bold text-xs shrink-0">
+              {activeAccount.initials}
+            </div>
             <div className="truncate">
               <div className="text-sm font-semibold text-white truncate">
                 {activeAccount.name}
