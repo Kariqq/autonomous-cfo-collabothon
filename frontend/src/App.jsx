@@ -5,6 +5,8 @@ const API_BASE_URL =
   'https://cfo-backend-api-autonomous-cfo-collabothon.apps.ocp.fr79k.sandbox786.opentlc.com';
 const STORAGE_KEY_ACCOUNTS = 'financiailly_accounts_v1';
 const STORAGE_KEY_ACTIVE = 'financiailly_active_id_v1';
+const STORAGE_KEY_THEME = 'financiailly_theme_v1';
+const STORAGE_KEY_FONT_SIZE = 'financiailly_font_size_v1';
 
 const TESTER_ACCOUNT = {
   id: 'acc-tester',
@@ -25,10 +27,16 @@ const TESTER_ACCOUNT = {
   provider: 'tester',
 };
 
-function renderFormattedMessage(text) {
+const FONT_SIZE_OPTIONS = [
+  { id: 'sm', label: 'A-', title: 'Small text', rootPx: '14px' },
+  { id: 'md', label: 'A', title: 'Default text', rootPx: '16px' },
+  { id: 'lg', label: 'A+', title: 'Large text', rootPx: '20px' },
+  { id: 'xl', label: 'A++', title: 'Extra large accessible text', rootPx: '25px' },
+];
+
+function renderFormattedMessage(text, isDark) {
   const cleanedText = String(text).replace(/\*\*/g, '');
 
-  // Matches standalone numbers/currencies/percentages only (ignores alphanumeric IDs like "34fej3h" or "INV-01")
   const standaloneNumberRegex =
     /((?<![A-Za-z0-9_-])(?:[+-]\s*)?(?:[€$£]\s*)?\d[\d.,]*(?:\s*(?:EUR|PLN|USD|CHF|%))?(?![A-Za-z0-9_-]))/g;
 
@@ -40,7 +48,10 @@ function renderFormattedMessage(text) {
 
     if (isStandaloneNumber) {
       return (
-        <strong key={index} className="font-bold text-white">
+        <strong
+          key={index}
+          className={`font-bold ${isDark ? 'text-white' : 'text-stone-950'}`}
+        >
           {part}
         </strong>
       );
@@ -51,6 +62,17 @@ function renderFormattedMessage(text) {
 }
 
 export default function App() {
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem(STORAGE_KEY_THEME) || 'dark';
+  });
+
+  const [fontSize, setFontSize] = useState(() => {
+    return localStorage.getItem(STORAGE_KEY_FONT_SIZE) || 'md';
+  });
+
+  const isDark = theme === 'dark';
+  const isExtraLarge = fontSize === 'xl';
+
   const [accounts, setAccounts] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_ACCOUNTS);
@@ -119,10 +141,24 @@ export default function App() {
   }, [isSignedIn, activeAccountId]);
 
   useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_THEME, theme);
+  }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_FONT_SIZE, fontSize);
+    const chosen = FONT_SIZE_OPTIONS.find((opt) => opt.id === fontSize) || FONT_SIZE_OPTIONS[1];
+    document.documentElement.style.fontSize = chosen.rootPx;
+  }, [fontSize]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, loading]);
 
   const activeAccount = accounts.find((a) => a.id === activeAccountId) || null;
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
 
   const formatEuro = (val) =>
     new Intl.NumberFormat('de-DE', {
@@ -132,16 +168,16 @@ export default function App() {
     }).format(val);
 
   const getLiquidityColor = (balance, buffer) => {
-    if (balance < 0) return 'text-rose-400';
-    if (balance < buffer) return 'text-amber-400';
-    return 'text-emerald-400';
+    if (balance < 0) return isDark ? 'text-rose-400' : 'text-rose-700';
+    if (balance < buffer) return isDark ? 'text-amber-400' : 'text-amber-700';
+    return isDark ? 'text-emerald-400' : 'text-emerald-700';
   };
 
   const getSignedMetricColor = (text) => {
     const trimmed = String(text).trim();
-    if (trimmed.startsWith('-')) return 'text-rose-400';
-    if (trimmed.startsWith('+')) return 'text-emerald-400';
-    return 'text-neutral-100';
+    if (trimmed.startsWith('-')) return isDark ? 'text-rose-400' : 'text-rose-700';
+    if (trimmed.startsWith('+')) return isDark ? 'text-emerald-400' : 'text-emerald-700';
+    return isDark ? 'text-neutral-100' : 'text-stone-900';
   };
 
   const addLog = (label) => {
@@ -296,21 +332,98 @@ export default function App() {
     }
   };
 
+  const renderAccessibilityControls = () => (
+    <div
+      role="group"
+      aria-label="Theme and text size controls"
+      className="flex items-center gap-2 flex-wrap"
+    >
+      <div
+        className={`flex items-center rounded-lg border p-0.5 ${
+          isDark
+            ? 'bg-neutral-950 border-neutral-800'
+            : 'bg-[#efe8db] border-[#d6cbb7]'
+        }`}
+      >
+        {FONT_SIZE_OPTIONS.map((opt) => {
+          const active = fontSize === opt.id;
+          return (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => setFontSize(opt.id)}
+              title={opt.title}
+              aria-label={opt.title}
+              aria-pressed={active}
+              className={`px-2.5 py-1 rounded text-xs font-mono transition cursor-pointer ${
+                active
+                  ? isDark
+                    ? 'bg-white text-neutral-950 font-bold'
+                    : 'bg-stone-900 text-[#fbf7f0] font-bold'
+                  : isDark
+                  ? 'text-neutral-400 hover:text-white'
+                  : 'text-stone-700 hover:text-stone-950'
+              }`}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <button
+        type="button"
+        onClick={toggleTheme}
+        aria-label={isDark ? 'Switch to light beige mode' : 'Switch to dark mode'}
+        title={isDark ? 'Switch to light beige mode' : 'Switch to dark mode'}
+        className={`px-3 py-1.5 rounded-lg border text-xs font-mono transition cursor-pointer ${
+          isDark
+            ? 'bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border-neutral-700'
+            : 'bg-[#efe8db] hover:bg-[#e5dccb] text-stone-900 border-[#d6cbb7]'
+        }`}
+      >
+        {isDark ? '☀ Light' : '☾ Dark'}
+      </button>
+    </div>
+  );
+
   if (!isSignedIn || !activeAccount) {
     return (
-      <div className="min-h-screen w-screen bg-neutral-950 text-neutral-100 flex items-center justify-center p-4 font-sans">
-        <div className="w-full max-w-md rounded-2xl bg-neutral-900 border border-neutral-800 p-7 space-y-6 shadow-2xl">
+      <div
+        className={`min-h-screen w-screen flex items-center justify-center p-4 font-sans transition-colors ${
+          isDark
+            ? 'bg-neutral-950 text-neutral-100'
+            : 'bg-[#f4efe6] text-stone-900'
+        }`}
+      >
+        <div
+          className={`w-full max-w-lg rounded-2xl border p-7 space-y-6 shadow-2xl ${
+            isDark
+              ? 'bg-neutral-900 border-neutral-800'
+              : 'bg-[#fbf7f0] border-[#dcd2c0]'
+          }`}
+        >
+          <div className="flex justify-end">{renderAccessibilityControls()}</div>
+
           <div className="flex flex-col items-center text-center gap-3">
             <img
               src="/logo.png"
               alt="FinancAI.lly logo"
-              className="h-14 w-auto object-contain"
+              className={`h-14 w-auto object-contain ${isDark ? '' : 'invert'}`}
             />
             <div>
-              <h1 className="font-mono text-2xl tracking-tight text-white font-semibold">
-                Financ<span className="text-neutral-400">AI</span>.lly
+              <h1
+                className={`font-mono text-2xl tracking-tight font-semibold ${
+                  isDark ? 'text-white' : 'text-stone-950'
+                }`}
+              >
+                Financ<span className={isDark ? 'text-neutral-400' : 'text-stone-500'}>AI</span>.lly
               </h1>
-              <p className="text-xs text-neutral-400 mt-1">
+              <p
+                className={`text-xs mt-1 ${
+                  isDark ? 'text-neutral-400' : 'text-stone-700'
+                }`}
+              >
                 Sign in to continue
               </p>
             </div>
@@ -318,65 +431,115 @@ export default function App() {
 
           <form onSubmit={handleEmailAuthSubmit} className="space-y-3 text-xs">
             <div>
-              <label className="block font-mono text-neutral-400 mb-1">
+              <label
+                htmlFor="login-email"
+                className={`block font-mono mb-1 ${
+                  isDark ? 'text-neutral-400' : 'text-stone-700'
+                }`}
+              >
                 EMAIL ADDRESS *
               </label>
               <input
+                id="login-email"
                 type="email"
                 required
                 value={authEmail}
                 onChange={(e) => setAuthEmail(e.target.value)}
                 placeholder="tester@financiai.lly"
-                className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-white"
+                className={`w-full border rounded-lg px-3.5 py-2.5 text-sm focus:outline-none ${
+                  isDark
+                    ? 'bg-neutral-950 border-neutral-700 text-white focus:border-white'
+                    : 'bg-[#f7f2e9] border-[#cfc3ae] text-stone-950 focus:border-stone-900'
+                }`}
               />
             </div>
 
             <div>
-              <label className="block font-mono text-neutral-400 mb-1">
+              <label
+                htmlFor="login-password"
+                className={`block font-mono mb-1 ${
+                  isDark ? 'text-neutral-400' : 'text-stone-700'
+                }`}
+              >
                 PASSWORD *
               </label>
               <input
+                id="login-password"
                 type="password"
                 required
                 value={authPassword}
                 onChange={(e) => setAuthPassword(e.target.value)}
                 placeholder="••••••••"
-                className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-white"
+                className={`w-full border rounded-lg px-3.5 py-2.5 text-sm focus:outline-none ${
+                  isDark
+                    ? 'bg-neutral-950 border-neutral-700 text-white focus:border-white'
+                    : 'bg-[#f7f2e9] border-[#cfc3ae] text-stone-950 focus:border-stone-900'
+                }`}
               />
             </div>
 
             {authError && (
-              <p className="text-[11px] text-rose-400">{authError}</p>
+              <p role="alert" className="text-xs text-rose-600 font-medium">
+                {authError}
+              </p>
             )}
 
             <button
               type="submit"
               disabled={authLoading}
-              className="w-full py-2.5 rounded-lg bg-white hover:bg-neutral-200 text-neutral-950 font-semibold text-sm transition cursor-pointer"
+              className={`w-full py-2.5 rounded-lg font-semibold text-sm transition cursor-pointer ${
+                isDark
+                  ? 'bg-white hover:bg-neutral-200 text-neutral-950'
+                  : 'bg-stone-900 hover:bg-stone-800 text-[#fbf7f0]'
+              }`}
             >
               {authLoading ? 'Authenticating...' : 'Sign In'}
             </button>
           </form>
 
-          <div className="pt-2 border-t border-neutral-800 space-y-2">
-            <div className="flex items-center justify-between text-[11px] font-mono text-neutral-500 uppercase">
+          <div
+            className={`pt-2 border-t space-y-2 ${
+              isDark ? 'border-neutral-800' : 'border-[#dfd6c5]'
+            }`}
+          >
+            <div
+              className={`flex items-center justify-between text-xs font-mono uppercase flex-wrap gap-1 ${
+                isDark ? 'text-neutral-500' : 'text-stone-600'
+              }`}
+            >
               <span>Tester Account</span>
               <span>tester@financiai.lly / tester123</span>
             </div>
             <button
               type="button"
               onClick={handleTesterQuickLogin}
-              className="w-full p-2.5 rounded-lg bg-neutral-950 hover:bg-neutral-800 border border-neutral-800 text-left flex items-center justify-between transition cursor-pointer"
+              className={`w-full p-3 rounded-lg border text-left flex items-center justify-between transition cursor-pointer ${
+                isDark
+                  ? 'bg-neutral-950 hover:bg-neutral-800 border-neutral-800'
+                  : 'bg-[#f5efe4] hover:bg-[#ebe3d3] border-[#d6cbb7]'
+              }`}
             >
               <div className="min-w-0">
-                <div className="text-xs font-semibold text-white truncate">
+                <div
+                  className={`text-xs font-semibold truncate ${
+                    isDark ? 'text-white' : 'text-stone-950'
+                  }`}
+                >
                   {TESTER_ACCOUNT.name}
                 </div>
-                <div className="text-[10px] font-mono text-neutral-400 truncate">
+                <div
+                  className={`text-xs font-mono truncate ${
+                    isDark ? 'text-neutral-400' : 'text-stone-700'
+                  }`}
+                >
                   {TESTER_ACCOUNT.email}
                 </div>
               </div>
-              <span className="text-[10px] font-mono text-neutral-400 shrink-0">
+              <span
+                className={`text-xs font-mono shrink-0 ${
+                  isDark ? 'text-neutral-400' : 'text-stone-700'
+                }`}
+              >
                 Sign In →
               </span>
             </button>
@@ -387,23 +550,45 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-neutral-950 text-neutral-100 flex flex-col p-3 gap-3 font-sans">
+    <div
+      className={`w-screen flex flex-col p-3 gap-3 font-sans transition-colors ${
+        isExtraLarge ? 'min-h-screen overflow-y-auto' : 'h-screen overflow-hidden'
+      } ${
+        isDark
+          ? 'bg-neutral-950 text-neutral-100'
+          : 'bg-[#f4efe6] text-stone-900'
+      }`}
+    >
       <div className="grid grid-cols-12 gap-3 shrink-0">
-        <header className="col-span-12 lg:col-span-9 rounded-xl bg-neutral-900 border border-neutral-800 px-5 py-2.5 flex flex-wrap items-center justify-between gap-4">
+        <header
+          className={`col-span-12 lg:col-span-9 rounded-xl border px-5 py-2.5 flex flex-wrap items-center justify-between gap-4 ${
+            isDark
+              ? 'bg-neutral-900 border-neutral-800'
+              : 'bg-[#fbf7f0] border-[#dcd2c0] shadow-xs'
+          }`}
+        >
           <div className="flex items-center gap-2">
             <img
               src="/logo.png"
               alt="FinancAI.lly logo"
-              className="h-10 w-auto object-contain shrink-0"
+              className={`h-10 w-auto object-contain shrink-0 ${isDark ? '' : 'invert'}`}
             />
-            <span className="font-mono text-xl leading-none tracking-tight text-white font-semibold">
-              Financ<span className="text-neutral-400">AI</span>.lly
+            <span
+              className={`font-mono text-xl leading-none tracking-tight font-semibold ${
+                isDark ? 'text-white' : 'text-stone-950'
+              }`}
+            >
+              Financ<span className={isDark ? 'text-neutral-400' : 'text-stone-500'}>AI</span>.lly
             </span>
           </div>
 
           <div className="flex flex-wrap items-center gap-6">
             <div>
-              <div className="text-[11px] text-neutral-500 uppercase tracking-wider">
+              <div
+                className={`text-xs uppercase tracking-wider ${
+                  isDark ? 'text-neutral-500' : 'text-stone-600'
+                }`}
+              >
                 Current Liquidity
               </div>
               <div
@@ -417,9 +602,17 @@ export default function App() {
                   : formatEuro(activeAccount.liquidity)}
               </div>
             </div>
-            <div className="h-7 w-px bg-neutral-800 hidden sm:block" />
+            <div
+              className={`h-7 w-px hidden sm:block ${
+                isDark ? 'bg-neutral-800' : 'bg-[#dfd6c5]'
+              }`}
+            />
             <div>
-              <div className="text-[11px] text-neutral-500 uppercase tracking-wider">
+              <div
+                className={`text-xs uppercase tracking-wider ${
+                  isDark ? 'text-neutral-500' : 'text-stone-600'
+                }`}
+              >
                 Est. Tax Liability
               </div>
               <div
@@ -430,9 +623,17 @@ export default function App() {
                 {activeAccount.taxLiability}
               </div>
             </div>
-            <div className="h-7 w-px bg-neutral-800 hidden sm:block" />
+            <div
+              className={`h-7 w-px hidden sm:block ${
+                isDark ? 'bg-neutral-800' : 'bg-[#dfd6c5]'
+              }`}
+            />
             <div>
-              <div className="text-[11px] text-neutral-500 uppercase tracking-wider">
+              <div
+                className={`text-xs uppercase tracking-wider ${
+                  isDark ? 'text-neutral-500' : 'text-stone-600'
+                }`}
+              >
                 Tax Savings Found
               </div>
               <div
@@ -446,7 +647,13 @@ export default function App() {
           </div>
         </header>
 
-        <div className="col-span-12 lg:col-span-3 rounded-xl bg-neutral-900 border border-neutral-800 px-4 py-3 flex items-center justify-between gap-2">
+        <div
+          className={`col-span-12 lg:col-span-3 rounded-xl border px-4 py-3 flex items-center justify-between gap-2 ${
+            isDark
+              ? 'bg-neutral-900 border-neutral-800'
+              : 'bg-[#fbf7f0] border-[#dcd2c0] shadow-xs'
+          }`}
+        >
           <button
             type="button"
             onClick={() => {
@@ -456,14 +663,28 @@ export default function App() {
             }}
             className="flex items-center gap-3 min-w-0 text-left hover:opacity-90 transition cursor-pointer flex-1"
           >
-            <div className="w-9 h-9 rounded-lg bg-neutral-800 border border-neutral-700 text-neutral-200 flex items-center justify-center font-mono font-bold text-xs shrink-0">
+            <div
+              className={`w-9 h-9 rounded-lg border flex items-center justify-center font-mono font-bold text-xs shrink-0 ${
+                isDark
+                  ? 'bg-neutral-800 border-neutral-700 text-neutral-200'
+                  : 'bg-[#efe8db] border-[#d6cbb7] text-stone-900'
+              }`}
+            >
               {activeAccount.initials}
             </div>
             <div className="truncate">
-              <div className="text-sm font-semibold text-white truncate">
+              <div
+                className={`text-sm font-semibold truncate ${
+                  isDark ? 'text-white' : 'text-stone-950'
+                }`}
+              >
                 {activeAccount.name}
               </div>
-              <div className="text-[11px] text-neutral-400 truncate">
+              <div
+                className={`text-xs truncate ${
+                  isDark ? 'text-neutral-400' : 'text-stone-700'
+                }`}
+              >
                 {activeAccount.email}
               </div>
             </div>
@@ -472,7 +693,11 @@ export default function App() {
           <button
             type="button"
             onClick={handleLogout}
-            className="text-[11px] font-mono px-2.5 py-1.5 rounded bg-neutral-800 hover:bg-rose-500/20 text-neutral-200 hover:text-rose-300 border border-neutral-700 hover:border-rose-500/40 shrink-0 transition cursor-pointer"
+            className={`text-xs font-mono px-2.5 py-1.5 rounded border shrink-0 transition cursor-pointer ${
+              isDark
+                ? 'bg-neutral-800 hover:bg-rose-500/20 text-neutral-200 hover:text-rose-300 border-neutral-700 hover:border-rose-500/40'
+                : 'bg-[#efe8db] hover:bg-rose-100 text-stone-900 hover:text-rose-700 border-[#d6cbb7] hover:border-rose-300'
+            }`}
           >
             Log out
           </button>
@@ -481,16 +706,50 @@ export default function App() {
 
       <div className="flex-1 min-h-0 grid grid-cols-12 gap-3">
         <aside className="col-span-12 lg:col-span-3 min-h-0 flex flex-col">
-          <div className="flex-1 min-h-0 rounded-xl bg-neutral-900 border border-neutral-800 p-4 flex flex-col">
-            <div className="text-[11px] font-mono uppercase tracking-widest text-neutral-500 mb-2">
+          <div
+            className={`flex-1 min-h-0 rounded-xl border p-4 flex flex-col ${
+              isDark
+                ? 'bg-neutral-900 border-neutral-800'
+                : 'bg-[#fbf7f0] border-[#dcd2c0] shadow-xs'
+            }`}
+          >
+            <div
+              className={`text-xs font-mono uppercase tracking-widest mb-2 ${
+                isDark ? 'text-neutral-500' : 'text-stone-600'
+              }`}
+            >
               Context & History
             </div>
 
-            <div className="p-3 rounded-lg bg-neutral-950 border border-neutral-800 text-[11px] space-y-1 mb-3 shrink-0 font-mono">
-              <div className="text-neutral-300 font-semibold">TAX CONTEXT:</div>
-              <div className="text-neutral-400 truncate">• User: {activeAccount.email}</div>
-              <div className="text-neutral-400 truncate">• Tax ID: {activeAccount.taxId}</div>
-              <div className="text-neutral-400">
+            <div
+              className={`p-3 rounded-lg border text-xs space-y-1 mb-3 shrink-0 font-mono ${
+                isDark
+                  ? 'bg-neutral-950 border-neutral-800'
+                  : 'bg-[#f4eee2] border-[#dfd6c5]'
+              }`}
+            >
+              <div
+                className={`font-semibold ${
+                  isDark ? 'text-neutral-300' : 'text-stone-900'
+                }`}
+              >
+                TAX CONTEXT:
+              </div>
+              <div
+                className={`truncate ${
+                  isDark ? 'text-neutral-400' : 'text-stone-700'
+                }`}
+              >
+                • User: {activeAccount.email}
+              </div>
+              <div
+                className={`truncate ${
+                  isDark ? 'text-neutral-400' : 'text-stone-700'
+                }`}
+              >
+                • Tax ID: {activeAccount.taxId}
+              </div>
+              <div className={isDark ? 'text-neutral-400' : 'text-stone-700'}>
                 • Safety Buffer: Min. {formatEuro(activeAccount.safetyBuffer)}
               </div>
             </div>
@@ -499,29 +758,68 @@ export default function App() {
               {historyLog.map((item) => (
                 <div
                   key={item.id}
-                  className="p-2.5 rounded-lg bg-neutral-950 border border-neutral-800/80 flex items-start gap-2.5"
+                  className={`p-2.5 rounded-lg border flex items-start gap-2.5 ${
+                    isDark
+                      ? 'bg-neutral-950 border-neutral-800/80'
+                      : 'bg-[#f4eee2] border-[#dfd6c5]'
+                  }`}
                 >
-                  <span className="text-[11px] font-mono text-neutral-500 shrink-0">
+                  <span
+                    className={`text-xs font-mono shrink-0 ${
+                      isDark ? 'text-neutral-500' : 'text-stone-600'
+                    }`}
+                  >
                     {item.time}
                   </span>
-                  <span className="text-neutral-300 leading-snug">{item.label}</span>
+                  <span
+                    className={`leading-snug ${
+                      isDark ? 'text-neutral-300' : 'text-stone-800'
+                    }`}
+                  >
+                    {item.label}
+                  </span>
                 </div>
               ))}
             </div>
           </div>
         </aside>
 
-        <main className="col-span-12 lg:col-span-9 min-h-0 rounded-xl bg-neutral-900 border border-neutral-800 flex flex-col overflow-hidden">
-          <div className="px-5 py-3 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-2 shrink-0">
-            <div className="flex items-center gap-2">
-              <h2 className="font-semibold text-base text-white">Tax Prep AI Agent</h2>
-              <span className="text-xs text-neutral-400">
+        <main
+          className={`col-span-12 lg:col-span-9 min-h-[24rem] rounded-xl border flex flex-col overflow-hidden ${
+            isDark
+              ? 'bg-neutral-900 border-neutral-800'
+              : 'bg-[#fbf7f0] border-[#dcd2c0] shadow-xs'
+          }`}
+        >
+          <div
+            className={`px-5 py-3 border-b flex flex-wrap items-center justify-between gap-2 shrink-0 ${
+              isDark ? 'border-neutral-800' : 'border-[#dfd6c5]'
+            }`}
+          >
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2
+                className={`font-semibold text-base ${
+                  isDark ? 'text-white' : 'text-stone-950'
+                }`}
+              >
+                Tax Prep AI Agent
+              </h2>
+              <span
+                className={`text-xs ${
+                  isDark ? 'text-neutral-400' : 'text-stone-700'
+                }`}
+              >
                 — Advance Tax & Deduction Optimizer
               </span>
             </div>
+
+            {renderAccessibilityControls()}
           </div>
 
-          <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          <div
+            aria-live="polite"
+            className="flex-1 overflow-y-auto p-5 space-y-4"
+          >
             <div className="space-y-3">
               {messages.map((msg, idx) => (
                 <div
@@ -529,18 +827,28 @@ export default function App() {
                   className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   <div
-                    className={`max-w-2xl px-4 py-3 rounded-xl text-sm leading-relaxed whitespace-pre-wrap ${
+                    className={`max-w-3xl px-4 py-3 rounded-xl text-sm leading-relaxed whitespace-pre-wrap ${
                       msg.role === 'user'
-                        ? 'bg-white text-neutral-950 font-medium'
-                        : 'bg-neutral-800 text-neutral-200 font-normal border border-neutral-700'
+                        ? isDark
+                          ? 'bg-white text-neutral-950 font-medium'
+                          : 'bg-stone-900 text-[#fbf7f0] font-medium'
+                        : isDark
+                        ? 'bg-neutral-800 text-neutral-200 font-normal border border-neutral-700'
+                        : 'bg-[#f2ebde] text-stone-950 font-normal border border-[#d8cebc]'
                     }`}
                   >
-                    {msg.role === 'assistant' ? renderFormattedMessage(msg.content) : msg.content}
+                    {msg.role === 'assistant'
+                      ? renderFormattedMessage(msg.content, isDark)
+                      : msg.content}
                   </div>
                 </div>
               ))}
               {loading && (
-                <div className="text-xs font-mono text-neutral-400 animate-pulse">
+                <div
+                  className={`text-xs font-mono animate-pulse ${
+                    isDark ? 'text-neutral-400' : 'text-stone-700'
+                  }`}
+                >
                   Tax Prep Agent reasoning on OpenShift AI...
                 </div>
               )}
@@ -548,24 +856,41 @@ export default function App() {
             </div>
           </div>
 
-          <div className="p-4 border-t border-neutral-800 bg-neutral-900 shrink-0">
+          <div
+            className={`p-4 border-t shrink-0 ${
+              isDark
+                ? 'border-neutral-800 bg-neutral-900'
+                : 'border-[#dfd6c5] bg-[#fbf7f0]'
+            }`}
+          >
             {attachedFile && (
-              <div className="mb-2 inline-flex items-center gap-2 px-3 py-1 rounded bg-neutral-800 border border-neutral-700 text-xs font-mono text-neutral-200">
+              <div
+                className={`mb-2 inline-flex items-center gap-2 px-3 py-1 rounded border text-xs font-mono ${
+                  isDark
+                    ? 'bg-neutral-800 border-neutral-700 text-neutral-200'
+                    : 'bg-[#efe8db] border-[#d6cbb7] text-stone-900'
+                }`}
+              >
                 <span>📎 {attachedFile.name}</span>
                 <button
                   type="button"
+                  aria-label="Remove attached file"
                   onClick={() => {
                     setAttachedFile(null);
                     if (fileInputRef.current) fileInputRef.current.value = '';
                   }}
-                  className="text-neutral-400 hover:text-white"
+                  className={
+                    isDark
+                      ? 'text-neutral-400 hover:text-white'
+                      : 'text-stone-600 hover:text-stone-950'
+                  }
                 >
                   ✕
                 </button>
               </div>
             )}
 
-            <form onSubmit={handleSend} className="flex items-center gap-2">
+            <form onSubmit={handleSend} className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -577,23 +902,36 @@ export default function App() {
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 title="Upload receipts, invoices, or tax CSV"
-                className="px-3.5 py-2.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-xs font-mono text-neutral-200 transition shrink-0"
+                className={`px-3.5 py-2.5 rounded-lg border text-xs font-mono transition shrink-0 cursor-pointer ${
+                  isDark
+                    ? 'bg-neutral-800 hover:bg-neutral-700 border-neutral-700 text-neutral-200'
+                    : 'bg-[#efe8db] hover:bg-[#e5dccb] border-[#d6cbb7] text-stone-900'
+                }`}
               >
                 + File
               </button>
 
               <input
                 type="text"
+                aria-label="Ask Tax Prep Agent"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder="Ask Tax Prep Agent or attach receipts/invoices..."
-                className="flex-1 bg-neutral-950 border border-neutral-700 rounded-lg px-4 py-2.5 text-sm text-white placeholder-neutral-500 focus:outline-none focus:border-neutral-400"
+                className={`flex-1 min-w-[12rem] border rounded-lg px-4 py-2.5 text-sm focus:outline-none ${
+                  isDark
+                    ? 'bg-neutral-950 border-neutral-700 text-white placeholder-neutral-500 focus:border-neutral-400'
+                    : 'bg-[#f7f2e9] border-[#cfc3ae] text-stone-950 placeholder-stone-500 focus:border-stone-900'
+                }`}
               />
 
               <button
                 type="submit"
                 disabled={loading}
-                className="px-5 py-2.5 rounded-lg bg-white hover:bg-neutral-200 disabled:opacity-50 text-neutral-950 font-semibold text-sm transition shrink-0"
+                className={`px-5 py-2.5 rounded-lg disabled:opacity-50 font-semibold text-sm transition shrink-0 cursor-pointer ${
+                  isDark
+                    ? 'bg-white hover:bg-neutral-200 text-neutral-950'
+                    : 'bg-stone-900 hover:bg-stone-800 text-[#fbf7f0]'
+                }`}
               >
                 Send
               </button>
@@ -603,28 +941,55 @@ export default function App() {
       </div>
 
       {accountModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="w-full max-w-lg rounded-xl bg-neutral-900 border border-neutral-700 overflow-hidden shadow-2xl">
-            <div className="px-5 py-3.5 border-b border-neutral-800 flex items-center justify-between">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="FinancAI.lly Account"
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div
+            className={`w-full max-w-lg rounded-xl border overflow-hidden shadow-2xl ${
+              isDark
+                ? 'bg-neutral-900 border-neutral-700'
+                : 'bg-[#fbf7f0] border-[#d6cbb7]'
+            }`}
+          >
+            <div
+              className={`px-5 py-3.5 border-b flex items-center justify-between ${
+                isDark ? 'border-neutral-800' : 'border-[#dfd6c5]'
+              }`}
+            >
               <div className="flex items-center gap-3">
                 <img
                   src="/logo.png"
                   alt="FinancAI.lly logo"
-                  className="w-8 h-8 object-contain"
+                  className={`w-8 h-8 object-contain ${isDark ? '' : 'invert'}`}
                 />
-                <span className="font-mono text-sm text-white">
+                <span
+                  className={`font-mono text-sm ${
+                    isDark ? 'text-white' : 'text-stone-950'
+                  }`}
+                >
                   FinancAI.lly Account
                 </span>
               </div>
               <button
                 onClick={() => setAccountModalOpen(false)}
-                className="text-neutral-400 hover:text-white text-sm font-mono"
+                className={`text-sm font-mono cursor-pointer ${
+                  isDark
+                    ? 'text-neutral-400 hover:text-white'
+                    : 'text-stone-600 hover:text-stone-950'
+                }`}
               >
                 [ESC / ✕]
               </button>
             </div>
 
-            <div className="grid grid-cols-2 border-b border-neutral-800 text-xs font-mono">
+            <div
+              className={`grid grid-cols-2 border-b text-xs font-mono ${
+                isDark ? 'border-neutral-800' : 'border-[#dfd6c5]'
+              }`}
+            >
               {[
                 { id: 'switch', label: 'My Accounts' },
                 { id: 'settings', label: 'Settings & Rules' },
@@ -632,10 +997,14 @@ export default function App() {
                 <button
                   key={tab.id}
                   onClick={() => setAccountModalTab(tab.id)}
-                  className={`py-3 text-center transition border-b-2 ${
+                  className={`py-3 text-center transition border-b-2 cursor-pointer ${
                     accountModalTab === tab.id
-                      ? 'border-white text-white bg-neutral-800/60'
-                      : 'border-transparent text-neutral-400 hover:text-neutral-200'
+                      ? isDark
+                        ? 'border-white text-white bg-neutral-800/60'
+                        : 'border-stone-900 text-stone-950 bg-[#efe8db]'
+                      : isDark
+                      ? 'border-transparent text-neutral-400 hover:text-neutral-200'
+                      : 'border-transparent text-stone-600 hover:text-stone-950'
                   }`}
                 >
                   {tab.label}
@@ -645,12 +1014,16 @@ export default function App() {
 
             {accountModalTab === 'switch' && (
               <div className="p-5 space-y-3">
-                <div className="flex items-center justify-between text-xs text-neutral-400">
+                <div
+                  className={`flex items-center justify-between text-xs ${
+                    isDark ? 'text-neutral-400' : 'text-stone-700'
+                  }`}
+                >
                   <span>Signed-in accounts:</span>
                   <button
                     type="button"
                     onClick={handleLogout}
-                    className="px-3 py-1 rounded bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/40 font-mono text-[11px] font-semibold transition cursor-pointer"
+                    className="px-3 py-1 rounded bg-rose-500/15 hover:bg-rose-500/25 text-rose-600 border border-rose-500/40 font-mono text-xs font-semibold transition cursor-pointer"
                   >
                     Log out
                   </button>
@@ -668,29 +1041,47 @@ export default function App() {
                           addLog(`Switched workspace to ${acc.name} (${acc.email})`);
                           setAccountModalOpen(false);
                         }}
-                        className={`w-full p-3.5 rounded-lg border text-left flex items-center justify-between transition ${
+                        className={`w-full p-3.5 rounded-lg border text-left flex items-center justify-between transition cursor-pointer ${
                           isCurrent
-                            ? 'bg-neutral-800 border-neutral-500 text-white'
-                            : 'bg-neutral-950 border-neutral-800 text-neutral-300 hover:border-neutral-600'
+                            ? isDark
+                              ? 'bg-neutral-800 border-neutral-500 text-white'
+                              : 'bg-[#efe8db] border-stone-500 text-stone-950'
+                            : isDark
+                            ? 'bg-neutral-950 border-neutral-800 text-neutral-300 hover:border-neutral-600'
+                            : 'bg-[#f5efe4] border-[#dfd6c5] text-stone-800 hover:border-stone-400'
                         }`}
                       >
                         <div>
                           <div className="text-sm font-semibold">{acc.name}</div>
-                          <div className="text-[11px] font-mono text-neutral-400 mt-0.5">
+                          <div
+                            className={`text-xs font-mono mt-0.5 ${
+                              isDark ? 'text-neutral-400' : 'text-stone-700'
+                            }`}
+                          >
                             {acc.email}
                           </div>
                         </div>
                         <div className="text-right">
                           <div
                             className={`text-sm font-mono font-semibold ${
-                              acc.liquidity < 0 ? 'text-rose-400' : 'text-emerald-400'
+                              acc.liquidity < 0
+                                ? isDark
+                                  ? 'text-rose-400'
+                                  : 'text-rose-700'
+                                : isDark
+                                ? 'text-emerald-400'
+                                : 'text-emerald-700'
                             }`}
                           >
                             {acc.liquidity > 0
                               ? `+${formatEuro(acc.liquidity)}`
                               : formatEuro(acc.liquidity)}
                           </div>
-                          <div className="text-[10px] font-mono text-neutral-400">
+                          <div
+                            className={`text-xs font-mono ${
+                              isDark ? 'text-neutral-400' : 'text-stone-700'
+                            }`}
+                          >
                             {isCurrent ? 'ACTIVE' : 'SWITCH'}
                           </div>
                         </div>
@@ -703,15 +1094,35 @@ export default function App() {
 
             {accountModalTab === 'settings' && (
               <div className="p-5 space-y-4 text-xs">
-                <div className="p-3 rounded-lg bg-neutral-950 border border-neutral-800">
-                  <div className="font-mono text-neutral-400">EDITING SETTINGS FOR:</div>
-                  <div className="text-sm font-semibold text-white mt-0.5">
+                <div
+                  className={`p-3 rounded-lg border ${
+                    isDark
+                      ? 'bg-neutral-950 border-neutral-800'
+                      : 'bg-[#f4eee2] border-[#dfd6c5]'
+                  }`}
+                >
+                  <div
+                    className={`font-mono ${
+                      isDark ? 'text-neutral-400' : 'text-stone-700'
+                    }`}
+                  >
+                    EDITING SETTINGS FOR:
+                  </div>
+                  <div
+                    className={`text-sm font-semibold mt-0.5 ${
+                      isDark ? 'text-white' : 'text-stone-950'
+                    }`}
+                  >
                     {activeAccount.name} ({activeAccount.email})
                   </div>
                 </div>
 
                 <div>
-                  <label className="block font-mono text-neutral-400 mb-1">
+                  <label
+                    className={`block font-mono mb-1 ${
+                      isDark ? 'text-neutral-400' : 'text-stone-700'
+                    }`}
+                  >
                     MINIMUM CASH SAFETY BUFFER (€)
                   </label>
                   <input
@@ -720,16 +1131,34 @@ export default function App() {
                     onChange={(e) =>
                       updateActiveAccountSetting('safetyBuffer', Number(e.target.value) || 0)
                     }
-                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-sm font-mono text-white focus:outline-none focus:border-white"
+                    className={`w-full border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none ${
+                      isDark
+                        ? 'bg-neutral-950 border-neutral-700 text-white focus:border-white'
+                        : 'bg-[#f7f2e9] border-[#cfc3ae] text-stone-950 focus:border-stone-900'
+                    }`}
                   />
                 </div>
 
-                <label className="flex items-center justify-between p-3 rounded-lg bg-neutral-950 border border-neutral-800 cursor-pointer">
+                <label
+                  className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer ${
+                    isDark
+                      ? 'bg-neutral-950 border-neutral-800'
+                      : 'bg-[#f4eee2] border-[#dfd6c5]'
+                  }`}
+                >
                   <div>
-                    <div className="text-sm font-medium text-white">
+                    <div
+                      className={`text-sm font-medium ${
+                        isDark ? 'text-white' : 'text-stone-950'
+                      }`}
+                    >
                       Sandbox Simulation Mode
                     </div>
-                    <div className="text-[11px] text-neutral-400">
+                    <div
+                      className={`text-xs ${
+                        isDark ? 'text-neutral-400' : 'text-stone-700'
+                      }`}
+                    >
                       Simulate approved tax filings without live submission
                     </div>
                   </div>
@@ -739,16 +1168,30 @@ export default function App() {
                     onChange={(e) =>
                       updateActiveAccountSetting('sandboxMode', e.target.checked)
                     }
-                    className="w-4 h-4 accent-white"
+                    className="w-4 h-4"
                   />
                 </label>
 
-                <label className="flex items-center justify-between p-3 rounded-lg bg-neutral-950 border border-neutral-800 cursor-pointer">
+                <label
+                  className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer ${
+                    isDark
+                      ? 'bg-neutral-950 border-neutral-800'
+                      : 'bg-[#f4eee2] border-[#dfd6c5]'
+                  }`}
+                >
                   <div>
-                    <div className="text-sm font-medium text-white">
+                    <div
+                      className={`text-sm font-medium ${
+                        isDark ? 'text-white' : 'text-stone-950'
+                      }`}
+                    >
                       Auto-Approve Low-Risk Actions (&lt; €500)
                     </div>
-                    <div className="text-[11px] text-neutral-400">
+                    <div
+                      className={`text-xs ${
+                        isDark ? 'text-neutral-400' : 'text-stone-700'
+                      }`}
+                    >
                       Allow Tax Agent to categorize minor deductions automatically
                     </div>
                   </div>
@@ -758,7 +1201,7 @@ export default function App() {
                     onChange={(e) =>
                       updateActiveAccountSetting('autoApproveSmall', e.target.checked)
                     }
-                    className="w-4 h-4 accent-white"
+                    className="w-4 h-4"
                   />
                 </label>
 
@@ -768,7 +1211,11 @@ export default function App() {
                       addLog(`Updated tax governance settings for ${activeAccount.name}`);
                       setAccountModalOpen(false);
                     }}
-                    className="px-4 py-2 rounded-lg bg-white text-neutral-950 font-semibold hover:bg-neutral-200"
+                    className={`px-4 py-2 rounded-lg font-semibold cursor-pointer ${
+                      isDark
+                        ? 'bg-white text-neutral-950 hover:bg-neutral-200'
+                        : 'bg-stone-900 text-[#fbf7f0] hover:bg-stone-800'
+                    }`}
                   >
                     Save Settings
                   </button>
